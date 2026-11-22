@@ -12,7 +12,9 @@ A subagent panel for the **DeepSeek Harness** right sidebar. It shows the subage
 - **Clearing promotes, never buries.** Clear a parent and its children are lifted into its place, one level up, marked with a dashed edge; clear two levels in a row and the surviving descendants still surface at the depth that survived. Nothing reachable disappears just because an ancestor was cleared.
 - **Four colour-coded states.** Running (animated accent arc), completed (green), ended abnormally (red), not running (hollow grey). "Ended abnormally" is derived from the last turn's end reason, so it honestly covers aborts and token-limit stops as well as hard errors.
 - **Detail drawer per card.** Creation time, usage figures, and a longer preview with a "jump to latest" pill. While the child is running the preview follows the newest message, and pauses following the moment you scroll up.
-- **Clear cards.** The trash control at the end of a card clears just that card; the header can clear every finished card at once; a hidden-count bar restores them. Clearing hides cards **in this panel only**, is remembered per conversation, and never deletes a session.
+- **Active work first.** Branches containing a running subagent sort to the top, newest first; a parent is hoisted together with its running child so the branch never splits. Everything else keeps its original order.
+- **A finishing card flashes.** For one minute after a subagent completes, a colour band travels along the card's top edge, then stops on its own.
+- **Clear cards.** A card's trash control clears just that card; **清失败 / Clear failed** clears every abnormally ended subagent in one click; the header trash clears all finished cards; a hidden-count bar restores them. Clearing hides cards **in this panel only**, is remembered per conversation, and never deletes a session.
 - **Stop a running subagent** through the Harness interrupt API.
 - **Keyboard accessible** via tree semantics (`role="tree"` / `treeitem`), arrow-key roving focus, `Enter`/`Space` to open the detail, and a proper focus ring. Motion is suppressed under `prefers-reduced-motion`.
 - **Chinese and English** UI, following the app locale.
@@ -81,7 +83,13 @@ It reads only session data the client already holds and makes **no model request
 
 层级**默认全部展开**：子代理再派出去的 agent 就在它下方缩进显示，一眼看到整棵树；折叠某个分支会被记住，直到你再次展开。
 
-清除父级**不会把子树一起埋掉**：子级会**上提一层**顶替它的位置，并带虚线左边框提示；连续清除两层，存活的孙辈仍会升到存活的层。可达的内容不会因为祖先被清除而消失。状态四色区分（运行中／已完成／未正常结束／未运行），用量与耗时随会话事件自动更新。
+**在运行的排前面**：含运行中子代理的分支整体前置（父级跟着一起上去，分支不会被拆散），其中创建时间最晚的排最前；其余卡片保持原顺序。
+
+**刚完成的卡片会闪**：完成后的 1 分钟内，卡片上边缘有一段彩色条带流动，1 分钟后自动停止。
+
+清除父级**不会把子树一起埋掉**：子级会**上提一层**顶替它的位置，并带虚线左边框提示；连续清除两层，存活的孙辈仍会升到存活的层。可达的内容不会因为祖先被清除而消失。
+
+**清失败**（头部按钮）一键清掉所有「未正常结束」的子代理，运行中与正常完成的不受影响。状态四色区分（运行中／已完成／未正常结束／未运行），用量与耗时随会话事件自动更新。
 
 点卡片展开详情：创建时间、用量、更长的对话预览。运行中的子智能体会**自动跟随最新消息**滚动，你手动上滚则暂停并出现「跳到最新」。
 

@@ -256,6 +256,8 @@ window.__ModuleLoader__.load({
       'action.dismiss': '知道了',
       'action.clearRow': '从面板清除「{label}」',
       'action.clearFinished': '清除已结束',
+      'action.clearFailed': '清失败',
+      'action.clearFailedHint': '一键清理未正常结束的子代理',
       'action.restoreAll': '全部恢复',
       'action.stop': '停止',
       'hidden.count': '已隐藏 {count}',
@@ -316,6 +318,8 @@ window.__ModuleLoader__.load({
       'action.dismiss': 'Dismiss',
       'action.clearRow': 'Clear "{label}" from the panel',
       'action.clearFinished': 'Clear finished',
+      'action.clearFailed': 'Clear failed',
+      'action.clearFailedHint': 'Clear every subagent that ended abnormally',
       'action.restoreAll': 'Restore all',
       'action.stop': 'Stop',
       'hidden.count': '{count} hidden',
@@ -617,6 +621,100 @@ window.__ModuleLoader__.load({
         }
       }
       return out;
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* 排序与闪动                                                          */
+    /* ------------------------------------------------------------------ */
+
+    /** 完成的卡片保持彩色条带闪动的时长。 */
+    const FLASH_WINDOW_MS = 60000;
+
+    /** 该卡片的子级里是否还有在运行的（只要分支里有活动，整条分支就该前置）。 */
+    function hasRunningDescendant(listState, statuses, id, depth) {
+      const level = typeof depth === 'number' ? depth : 0;
+      if (level > 3) return false;
+      const catalog = deriveCatalog(listState, statuses, id);
+      for (let i = 0; i < catalog.entries.length; i++) {
+        const entry = catalog.entries[i];
+        if (entry.activity === 'running') return true;
+        if (hasRunningDescendant(listState, statuses, entry.id, level + 1)) return true;
+      }
+      return false;
+    }
+
+    /**
+     * 排序默认值：运行中的排到前面，且**最新创建的排最前**；
+     * 某个运行中的子代理如果挂在别的卡片下面，它所属的那张卡片跟着一起前置
+     * （否则分支会被拆散）。其余卡片保持原顺序。
+     */
+    function sortLevelEntries(entries, listState, statuses) {
+      const busy = [];
+      const rest = [];
+      entries.forEach(function (entry, index) {
+        const active = entry.activity === 'running' ||
+          hasRunningDescendant(listState, statuses, entry.id);
+        const createdAt = typeof entry.createdAt === 'number' && isFinite(entry.createdAt) ? entry.createdAt : 0;
+        if (active) busy.push({ entry: entry, index: index, createdAt: createdAt });
+        else rest.push(entry);
+      });
+      if (busy.length === 0) return entries;
+      busy.sort(function (a, b) {
+        if (b.createdAt !== a.createdAt) return b.createdAt - a.createdAt;
+        return a.index - b.index;
+      });
+      return busy.map(function (item) { return item.entry; }).concat(rest);
+    }
+
+    /** 刚完成（1 分钟内）的卡片才闪条带。 */
+    function isFreshlyCompleted(entry, listState, statuses, now) {
+      if (typeof now !== 'number') return false;
+      if (entryState(entry, listState, statuses) !== 'completed') return false;
+      const summary = listState.byId[entry.id];
+      const updatedAt = summary && typeof summary.updatedAt === 'number' ? summary.updatedAt : undefined;
+      if (updatedAt === undefined) return false;
+      const age = now - updatedAt;
+      return age >= 0 && age < FLASH_WINDOW_MS;
+    }
+
+    /** 可见范围里是否还有刚完成、正在闪条带的卡片（用于让秒级时钟多跑一分钟）。 */
+    function anyFlashing(listState, statuses, rootId, hidden, now) {
+      const hiddenSet = hidden || new Set();
+      const seen = new Set();
+      const queue = [rootId];
+      while (queue.length > 0 && seen.size < 200) {
+        const id = queue.shift();
+        if (typeof id !== 'string' || seen.has(id)) continue;
+        seen.add(id);
+        const catalog = deriveCatalog(listState, statuses, id);
+        for (let i = 0; i < catalog.entries.length; i++) {
+          const entry = catalog.entries[i];
+          if (hiddenSet.has(entry.id)) { queue.push(entry.id); continue; }
+          if (isFreshlyCompleted(entry, listState, statuses, now)) return true;
+          queue.push(entry.id);
+        }
+      }
+      return false;
+    }
+
+    /** 可见范围里是否还有「未正常结束」的子代理（决定是否显示一键清理按钮）。 */
+    function anyFailedVisible(listState, statuses, rootId, hidden) {
+      const hiddenSet = hidden || new Set();
+      const seen = new Set();
+      const queue = [rootId];
+      while (queue.length > 0 && seen.size < 200) {
+        const id = queue.shift();
+        if (typeof id !== 'string' || seen.has(id)) continue;
+        seen.add(id);
+        const catalog = deriveCatalog(listState, statuses, id);
+        for (let i = 0; i < catalog.entries.length; i++) {
+          const entry = catalog.entries[i];
+          if (hiddenSet.has(entry.id)) { queue.push(entry.id); continue; }
+          if (entryState(entry, listState, statuses) === 'failed') return true;
+          queue.push(entry.id);
+        }
+      }
+      return false;
     }
 
     /* ------------------------------------------------------------------ */
@@ -1237,6 +1335,10 @@ window.__ModuleLoader__.load({
       '.dspTree{display:flex;flex-direction:column;gap:9px;}',
       // 被上提的卡片（原来在已清除的父级之下）用虚线左边框提示它换了一层。
       '.dspNode[data-lifted="true"]>.dspCard{border-left-style:dashed;border-left-width:2px;border-left-color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary));}',
+      // 刚完成的卡片：一条彩色条带沿上边缘流动，1 分钟后（data-flash 撤掉）自然停止。
+      '.dspNode[data-flash="true"]>.dspCard::before{content:"";position:absolute;left:0;right:0;top:0;height:2px;border-radius:var(--dsw-radius-md,12px) var(--dsw-radius-md,12px) 0 0;background:linear-gradient(90deg,#34c759,#0a84ff,#bf5af2,#ff9f0a,#34c759);background-size:220% 100%;animation:dspBand 1.5s linear infinite;pointer-events:none;}',
+      '.dspNode[data-flash="true"]>.dspCard{border-color:var(--dsw-alias-border-l2);}',
+      '@keyframes dspBand{from{background-position:0% 0;}to{background-position:220% 0;}}',
       '.dspLabel{color:inherit;flex:1 1 auto;min-width:0;font-size:13px;font-weight:400;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}',
       '.dspNode[data-current="true"] .dspLabel{font-weight:500;}',
       '.dspSecondary{flex:1 1 auto;min-width:0;color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary));font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}',
@@ -1274,7 +1376,7 @@ window.__ModuleLoader__.load({
       '.dspText{display:-webkit-box;-webkit-line-clamp:6;-webkit-box-orient:vertical;overflow:hidden;font-size:12px;line-height:18px;overflow-wrap:anywhere;white-space:pre-wrap;}',
       '.dspDetailNote{margin:0;padding:8px 0 2px;color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary));font-size:11px;line-height:16px;overflow-wrap:anywhere;}',
       '.dspDetailError{margin:0;padding:8px 0 2px;color:var(--dsw-alias-state-error-primary);font-size:11px;line-height:16px;overflow-wrap:anywhere;}',
-      '@media(prefers-reduced-motion:reduce){.dspSpin,.dspIconButton[data-busy="true"] svg{animation:none;}.dspDisclosure svg{transition:none;}}',
+      '@media(prefers-reduced-motion:reduce){.dspSpin,.dspIconButton[data-busy="true"] svg,.dspNode[data-flash="true"]>.dspCard::before{animation:none;}.dspDisclosure svg{transition:none;}}',
     ].join('\n');
 
     /* ------------------------------------------------------------------ */
@@ -1376,6 +1478,20 @@ window.__ModuleLoader__.load({
         persistHidden(rootId, next);
         bumpHidden();
       };
+      /** 只清「未正常结束」的子代理，运行中与正常完成的都不动。 */
+      const dismissFailed = function () {
+        if (rootId === undefined) return;
+        const next = new Set(hiddenOf(rootId));
+        collectLevelIds(listState, statuses, rootId).forEach(function (levelId) {
+          deriveCatalog(listState, statuses, levelId).entries.forEach(function (entry) {
+            if (next.has(entry.id)) return;
+            if (entryState(entry, listState, statuses) === 'failed') next.add(entry.id);
+          });
+        });
+        persistHidden(rootId, next);
+        if (detailId !== undefined && next.has(detailId)) setDetailId(undefined);
+        bumpHidden();
+      };
       const restoreAll = function () {
         if (rootId === undefined) return;
         persistHidden(rootId, new Set());
@@ -1399,8 +1515,14 @@ window.__ModuleLoader__.load({
       const running = rootId === undefined
         ? false
         : anyRunningVisible(listState, statuses, rootId, collapsed, hidden);
+      // 刚完成的卡片要在 1 分钟内停掉闪动，所以即使没有运行中的子代理，
+      // 只要还有新鲜完成的卡片，时钟也得继续走一小会儿。
+      const flashing = rootId === undefined
+        ? false
+        : !running && anyFlashing(listState, statuses, rootId, hidden, now);
+      const ticking = running || flashing;
       React.useEffect(function () {
-        if (!running) return undefined;
+        if (!ticking) return undefined;
         const clock = getPluginService('timer');
         let dispose;
         if (clock && typeof clock.interval === 'function') {
@@ -1410,7 +1532,7 @@ window.__ModuleLoader__.load({
           dispose = function () { clearInterval(id); };
         }
         return function () { if (typeof dispose === 'function') dispose(); };
-      }, [running]);
+      }, [ticking]);
 
       React.useEffect(function () {
         if (rootId === undefined) return undefined;
@@ -1452,14 +1574,23 @@ window.__ModuleLoader__.load({
       const hasFinished = visible.some(function (e) {
         return entryState(e, listState, statuses) !== 'running';
       });
+      const hasFailed = anyFailedVisible(listState, statuses, rootId, hidden);
 
       return h('div', { className: 'dspRoot', 'data-subagent-inspector': '' },
         h('div', { className: 'dspHead' },
           h('span', { key: 'lead', className: 'dspLead', 'aria-hidden': true }, h(PanelIcon, { size: 14 })),
           h('span', { key: 'title', className: 'dspTitle' }, t('panel.title')),
           runningCount > 0 ? h('span', { key: 'spin', className: 'dspSpin', 'aria-hidden': true }) : null,
-          progress !== '' ? h('span', { key: 'progress', className: 'dspProgress' }, progress) : null,
+          progress !== '' ? h('span', { key: 'progress', className: 'dspProgress', title: progress }, progress) : null,
           h('span', { key: 'spring', className: 'dspSpring' }),
+          // 一键清理失败子代理：文字按钮，比再放一个图标更好认。
+          hasFailed
+            ? h('button', {
+              key: 'clearFailed', type: 'button', className: 'dspLinkButton',
+              title: t('action.clearFailedHint'), 'aria-label': t('action.clearFailedHint'),
+              onClick: function () { dismissFailed(); },
+            }, t('action.clearFailed'))
+            : null,
           hasFinished
             ? h('button', {
               key: 'clear', type: 'button', className: 'dspIconButton',
@@ -1538,7 +1669,10 @@ window.__ModuleLoader__.load({
 
       const catalog = deriveCatalog(listState, statuses, parentId);
       const hiddenSet = hidden || new Set();
-      const entries = liftHiddenLevels(listState, statuses, catalog.entries, hiddenSet);
+      const entries = sortLevelEntries(
+        liftHiddenLevels(listState, statuses, catalog.entries, hiddenSet),
+        listState, statuses,
+      );
 
       // 默认展开意味着深层目录不一定已加载：本级一渲染就把它的目录拉起来。
       React.useEffect(function () {
@@ -1899,6 +2033,8 @@ window.__ModuleLoader__.load({
           'data-state': state,
           // 原本在已清除卡片之下、被上提一层的条目
           'data-lifted': entry.lifted === true ? 'true' : undefined,
+          // 刚完成的卡片：边框走一段彩色条带动画，1 分钟后自动停
+          'data-flash': isFreshlyCompleted(entry, listState, statuses, now) ? 'true' : undefined,
         }, nodeChildren);
       }));
     }
