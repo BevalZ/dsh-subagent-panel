@@ -696,14 +696,52 @@ window.__ModuleLoader__.load({
      */
     const lastEventTimes = {};
 
+    /** 上一次观察到的状态，用来识别「运行中 → 完成」这次跃迁。 */
+    const observedStates = {};
+
+    /** 卡片的完成时刻：优先用事件流里的真实时间，其次用跃迁发生的那一刻。 */
+    const completionTimes = {};
+
+    /**
+     * 记录状态跃迁。
+     * 之前只靠事件流时间判断，而那是由卡片订阅回调异步写入的：子代理结束的那一次
+     * 渲染里缓存还没更新，`flashing` 判为 false，秒级时钟随即停下，之后再没人触发
+     * 渲染 —— 彩环就永远不出现。所以跃迁发生时就地记下时间，不依赖回调先后。
+     */
+    function noteCompletion(entry, state, now) {
+      const id = entry.id;
+      const previous = observedStates[id];
+      observedStates[id] = state;
+      if (state !== 'completed') {
+        if (state !== 'running') delete completionTimes[id];
+        return;
+      }
+      const fromEvents = lastEventTimes[id];
+      if (typeof fromEvents === 'number' && isFinite(fromEvents)) {
+        completionTimes[id] = fromEvents;
+        return;
+      }
+      if (typeof completionTimes[id] === 'number') return;
+      // 没有事件时间时，只认「亲眼看到它从运行中变成完成」；挂载时就已完成的不闪。
+      if (previous === 'running' && typeof now === 'number') completionTimes[id] = now;
+    }
+
     /** 刚完成（30 秒内）的卡片才闪彩环。 */
     function isFreshlyCompleted(entry, listState, statuses, now) {
+      const state = entryState(entry, listState, statuses);
+      noteCompletion(entry, state, now);
+      if (state !== 'completed') return false;
+      const at = completionTimes[entry.id];
+      if (typeof at !== 'number' || !isFinite(at)) return false;
       if (typeof now !== 'number') return false;
-      if (entryState(entry, listState, statuses) !== 'completed') return false;
-      const lastEventTime = lastEventTimes[entry.id];
-      if (typeof lastEventTime !== 'number' || !isFinite(lastEventTime)) return false;
-      const age = now - lastEventTime;
+      const age = now - at;
       return age >= 0 && age < FLASH_WINDOW_MS;
+    }
+
+    /** 事件流读到新的最后事件时间时同步一次完成时刻（用于挂载时就已完成的卡片）。 */
+    function syncCompletionFromEvents(childId, eventTime, now) {
+      lastEventTimes[childId] = eventTime;
+      if (observedStates[childId] === 'completed') completionTimes[childId] = eventTime;
     }
 
     /** 可见范围里是否还有刚完成、正在闪条带的卡片（用于让秒级时钟多跑一分钟）。 */
@@ -1146,7 +1184,9 @@ window.__ModuleLoader__.load({
               const snapshot = source.getSnapshot();
               // 顺手记下最后一次事件的真实时间：它就是「完成时刻」的时间源。
               const lastTime = extractLastEventTime(snapshot);
-              if (typeof lastTime === 'number') lastEventTimes[address.childSessionId] = lastTime;
+              if (typeof lastTime === 'number') {
+                syncCompletionFromEvents(address.childSessionId, lastTime, Date.now());
+              }
               const next = extractTranscript(snapshot, CARD_LINES);
               const tail = next.messages.length > 0 ? next.messages[next.messages.length - 1] : undefined;
               const signature = next.messages.length + '|' +
