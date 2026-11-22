@@ -572,10 +572,10 @@ window.__ModuleLoader__.load({
      */
     /**
      * 可见层级里是否还有运行中的子代理（决定是否启动秒级时钟）。
-     * 沿两条边下探：用户展开的分支，以及**被清除但子级被上提**的分支——
-     * 后者的子级仍在屏幕上，它们的耗时也必须继续跳动。
+     * 默认全展开，所以沿三条边下探：未被折叠的分支、被清除但子级被上提的分支
+     * （后者的子级仍在屏幕上，耗时必须继续跳动），以及根层。
      */
-    function anyRunningVisible(listState, statuses, rootId, expanded, hidden) {
+    function anyRunningVisible(listState, statuses, rootId, collapsed, hidden) {
       const hiddenSet = hidden || new Set();
       const queue = [rootId];
       const seen = new Set();
@@ -588,10 +588,35 @@ window.__ModuleLoader__.load({
           const entry = catalog.entries[i];
           if (hiddenSet.has(entry.id)) { queue.push(entry.id); continue; }
           if (entry.activity === 'running') return true;
-          if (expanded.has(entry.id)) queue.push(entry.id);
+          if (!collapsed.has(entry.id)) queue.push(entry.id);
         }
       }
       return false;
+    }
+
+    /**
+     * 已加载、且在树里可达的所有层级（根 + 未被折叠的分支 + 被清除分支的子级）。
+     * 供「刷新全部」与「清除已结束」使用；有上限，避免异常数据下的爆炸。
+     */
+    function collectLevelIds(listState, statuses, rootId, collapsed, hidden) {
+      const hiddenSet = hidden || new Set();
+      const collapsedSet = collapsed || new Set();
+      const out = [];
+      const seen = new Set();
+      const queue = [rootId];
+      while (queue.length > 0 && seen.size < 200) {
+        const id = queue.shift();
+        if (typeof id !== 'string' || seen.has(id)) continue;
+        seen.add(id);
+        out.push(id);
+        const catalog = deriveCatalog(listState, statuses, id);
+        for (let i = 0; i < catalog.entries.length; i++) {
+          const entry = catalog.entries[i];
+          if (hiddenSet.has(entry.id)) { queue.push(entry.id); continue; }
+          if (!collapsedSet.has(entry.id)) queue.push(entry.id);
+        }
+      }
+      return out;
     }
 
     /* ------------------------------------------------------------------ */
@@ -1269,9 +1294,10 @@ window.__ModuleLoader__.load({
       const listState = props.useSessions(function (v) { return v; });
       const statuses = props.useSessionStatus(function (v) { return v; });
 
-      const expandedState = React.useState(function () { return new Set(); });
-      const expanded = expandedState[0];
-      const setExpanded = expandedState[1];
+      // 默认全部展开：记录的是「用户手动折叠了哪些分支」，而不是展开了哪些。
+      const collapsedState = React.useState(function () { return new Set(); });
+      const collapsed = collapsedState[0];
+      const setCollapsed = collapsedState[1];
       const detailState = React.useState(undefined);
       const detailId = detailState[0];
       const setDetailId = detailState[1];
@@ -1295,15 +1321,15 @@ window.__ModuleLoader__.load({
 
       const hidden = rootId === undefined ? new Set() : hiddenOf(rootId);
 
-      // 面板绑定到具体对话：换会话即是另一棵树，展开与详情状态一并复位，
+      // 面板绑定到具体对话：换会话即是另一棵树，折叠与详情状态一并复位，
       // 免得把上一个对话里的子级 id 带过来。
       React.useEffect(function () {
-        setExpanded(new Set());
+        setCollapsed(new Set());
         setDetailId(undefined);
       }, [rootId]);
 
       const toggleBranch = function (id) {
-        setExpanded(function (current) {
+        setCollapsed(function (current) {
           const next = new Set(current);
           if (next.has(id)) next.delete(id);
           else next.add(id);
@@ -1317,7 +1343,9 @@ window.__ModuleLoader__.load({
       const doRefresh = function () {
         setBusy(true);
         const tasks = [prepareLevel(rootId)];
-        Array.from(expanded).forEach(function (id) { tasks.push(refreshOne(id)); });
+        collectLevelIds(listState, statuses, rootId).forEach(function (id) {
+          if (id !== rootId) tasks.push(refreshOne(id));
+        });
         // 必须保证 busy 一定复位：任何一步 reject 都会让刷新按钮永久禁用。
         void Promise.all(tasks)
           .catch(function (error) { console.error('[subagent-panel] refresh failed:', error); })
@@ -1335,12 +1363,11 @@ window.__ModuleLoader__.load({
         // 否则上提时读不到子级、子树会整块消失。
         void prepareLevel(childId);
       };
-      /** 批量清除：覆盖根层与所有已展开层级里"非运行中"的行。 */
+      /** 批量清除：覆盖所有已加载层级里"非运行中"的行（默认全展开，所以是整棵树）。 */
       const dismissFinished = function () {
         if (rootId === undefined) return;
         const next = new Set(hiddenOf(rootId));
-        const levels = [rootId].concat(Array.from(expanded));
-        levels.forEach(function (levelId) {
+        collectLevelIds(listState, statuses, rootId).forEach(function (levelId) {
           deriveCatalog(listState, statuses, levelId).entries.forEach(function (entry) {
             if (next.has(entry.id)) return;
             if (entryState(entry, listState, statuses) !== 'running') next.add(entry.id);
@@ -1356,7 +1383,7 @@ window.__ModuleLoader__.load({
       };
 
       // bindCommands 只在 tab 变化时重绑，所以这里用 ref 取最新一次渲染的函数，
-      // 避免闭包里抓到旧的 expanded / rootId。
+      // 避免闭包里抓到旧的折叠集合 / rootId。
       const refreshRef = React.useRef(null);
       refreshRef.current = doRefresh;
       React.useEffect(function () {
@@ -1371,7 +1398,7 @@ window.__ModuleLoader__.load({
 
       const running = rootId === undefined
         ? false
-        : anyRunningVisible(listState, statuses, rootId, expanded, hidden);
+        : anyRunningVisible(listState, statuses, rootId, collapsed, hidden);
       React.useEffect(function () {
         if (!running) return undefined;
         const clock = getPluginService('timer');
@@ -1476,7 +1503,7 @@ window.__ModuleLoader__.load({
           h(PanelRows, {
             parentId: rootId, level: 1, listState: listState, statuses: statuses,
             now: now, currentSessionId: rootId,
-            expanded: expanded, toggleBranch: toggleBranch,
+            collapsed: collapsed, toggleBranch: toggleBranch,
             detailId: detailId, setDetailId: setDetailId,
             hidden: hidden, dismiss: dismiss, reportError: reportError,
             closePanel: closeTab, t: t,
@@ -1496,7 +1523,7 @@ window.__ModuleLoader__.load({
       const statuses = props.statuses;
       const now = props.now;
       const currentSessionId = props.currentSessionId;
-      const expanded = props.expanded;
+      const collapsed = props.collapsed;
       const toggleBranch = props.toggleBranch;
       const detailId = props.detailId;
       const setDetailId = props.setDetailId;
@@ -1505,12 +1532,25 @@ window.__ModuleLoader__.load({
       const reportError = props.reportError;
       const closePanel = props.closePanel;
       const t = props.t;
+      // 嵌套层（某个卡片的下级）没有内容时不显示提示语：默认全展开时，
+      // 叶子节点本来就没有子级，不该每张卡都挂一句「尚未加载子智能体」。
+      const nested = props.nested === true;
 
       const catalog = deriveCatalog(listState, statuses, parentId);
       const hiddenSet = hidden || new Set();
       const entries = liftHiddenLevels(listState, statuses, catalog.entries, hiddenSet);
 
+      // 默认展开意味着深层目录不一定已加载：本级一渲染就把它的目录拉起来。
+      React.useEffect(function () {
+        if (nested) void refreshOne(parentId);
+      }, [parentId]);
+
       if (entries.length === 0) {
+        if (nested) {
+          return catalog.state === 'error'
+            ? h('div', { className: 'dspRowError', role: 'alert' }, t('catalog.failed'))
+            : null;
+        }
         if (catalog.state === 'error') {
           return h('div', { className: 'dspError', role: 'alert' },
             h('span', { key: 'msg' }, t('catalog.failed')),
@@ -1538,7 +1578,7 @@ window.__ModuleLoader__.load({
         const external = entry.mode === 'external';
         const expandable = canExpand(entry, listState);
         const failedChildren = childCatalogFailed(entry, listState);
-        const isExpanded = expandable && expanded.has(entry.id);
+        const isExpanded = expandable && !collapsed.has(entry.id);
         const isCurrent = entry.id === currentSessionId;
         const summary = listState.byId[entry.id];
         const migration = (summary !== undefined && summary.formatStatus === 'migration-required') ||
@@ -1842,10 +1882,11 @@ window.__ModuleLoader__.load({
             h(PanelRows, {
               parentId: entry.id, level: level + 1, listState: listState,
               statuses: statuses, now: now, currentSessionId: currentSessionId,
-              expanded: expanded, toggleBranch: toggleBranch,
+              collapsed: collapsed, toggleBranch: toggleBranch,
               detailId: detailId, setDetailId: setDetailId,
               hidden: hidden, dismiss: dismiss,
               closePanel: closePanel, t: t, reportError: reportError,
+              nested: true,
             }),
           ));
         }

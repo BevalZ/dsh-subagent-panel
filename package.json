@@ -1,6 +1,6 @@
 {
   "name": "dsh-subagent-panel",
-  "version": "1.6.1",
+  "version": "1.7.0",
   "description": "Subagent panel for the DeepSeek Harness right sidebar: a colour-coded subagent tree with live token/duration figures, a per-row detail drawer with an auto-following transcript preview, per-row and bulk clear, and a stop action for running children.",
   "keywords": [
     "dsh",
@@ -54,6 +54,7 @@
     }
   }
 }
+
 
 
 

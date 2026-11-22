@@ -8,7 +8,8 @@ A subagent panel for the **DeepSeek Harness** right sidebar. It shows the subage
 
 - **One card per subagent**, each showing the **latest three lines** of that subagent's conversation, live: every card retains its own child session and subscribes to its event stream, so new messages slide in without a refresh.
 - **Cards you can tell apart.** Each card carries a first-character identity badge, a short `#id` suffix, a stronger border with a resting shadow, and generous spacing. Right of the title sit **the provider and model that subagent actually runs on** (two stacked lines, read from the child's durable `modelSelection` projection — `lastUsed` first, then a pending choice), immediately before the token and duration figures. Nothing is invented: if a child has no recorded selection, those two lines simply do not appear.
-- **Live tree** of the current conversation's subagents — direct children, plus grandchildren you expand. Token usage and active duration update as the session publishes.
+- **Live tree, expanded by default.** Agents a subagent dispatched appear indented under it, so the hierarchy is visible without clicking; collapsing a branch is remembered per conversation until you reopen it. Token usage and active duration update as the session publishes.
+- **Clearing promotes, never buries.** Clear a parent and its children are lifted into its place, one level up, marked with a dashed edge; clear two levels in a row and the surviving descendants still surface at the depth that survived. Nothing reachable disappears just because an ancestor was cleared.
 - **Four colour-coded states.** Running (animated accent arc), completed (green), ended abnormally (red), not running (hollow grey). "Ended abnormally" is derived from the last turn's end reason, so it honestly covers aborts and token-limit stops as well as hard errors.
 - **Detail drawer per card.** Creation time, usage figures, and a longer preview with a "jump to latest" pill. While the child is running the preview follows the newest message, and pauses following the moment you scroll up.
 - **Clear cards.** The trash control at the end of a card clears just that card; the header can clear every finished card at once; a hidden-count bar restores them. Clearing hides cards **in this panel only**, is remembered per conversation, and never deletes a session.
@@ -76,7 +77,11 @@ It reads only session data the client already holds and makes **no model request
 
 **子智能体面板**是 DeepSeek Harness 右侧栏的插件：**每个子智能体是一张卡片**，卡片底部实时显示该子代理**最近三行**对话——每张卡片各自 retain 其子会话并订阅事件流，新消息无需刷新就会滑入。
 
-为了一眼分清不同子代理，每张卡片有**首字徽标**、`#id` 短标识、更明确的描边与间距；标题右侧是**该子代理实际使用的供应商与模型**（上下两行，读自子会话的 `modelSelection` 投影，优先 `lastUsed`，其次 `pending`），紧挨在 token 与耗时之前。读不到选择就**不显示**这两行，不做猜测。状态四色区分（运行中／已完成／未正常结束／未运行），用量与耗时随会话事件自动更新。
+为了一眼分清不同子代理，每张卡片有**首字徽标**、`#id` 短标识、更明确的描边与间距；标题右侧是**该子代理实际使用的供应商与模型**（上下两行，读自子会话的 `modelSelection` 投影，优先 `lastUsed`，其次 `pending`），紧挨在 token 与耗时之前。读不到选择就**不显示**这两行，不做猜测。
+
+层级**默认全部展开**：子代理再派出去的 agent 就在它下方缩进显示，一眼看到整棵树；折叠某个分支会被记住，直到你再次展开。
+
+清除父级**不会把子树一起埋掉**：子级会**上提一层**顶替它的位置，并带虚线左边框提示；连续清除两层，存活的孙辈仍会升到存活的层。可达的内容不会因为祖先被清除而消失。状态四色区分（运行中／已完成／未正常结束／未运行），用量与耗时随会话事件自动更新。
 
 点卡片展开详情：创建时间、用量、更长的对话预览。运行中的子智能体会**自动跟随最新消息**滚动，你手动上滚则暂停并出现「跳到最新」。
 
