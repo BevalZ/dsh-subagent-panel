@@ -264,6 +264,8 @@ window.__ModuleLoader__.load({
       'action.clearFinished': '清除已结束',
       'action.clearFailed': '清失败',
       'action.clearFailedHint': '一键清理未正常结束的子代理',
+      'action.clearCompleted': '清完成',
+      'action.clearCompletedHint': '一键清理已正常完成的子代理',
       'action.restoreAll': '全部恢复',
       'action.stop': '停止',
       'hidden.count': '已隐藏 {count}',
@@ -326,6 +328,8 @@ window.__ModuleLoader__.load({
       'action.clearFinished': 'Clear finished',
       'action.clearFailed': 'Clear failed',
       'action.clearFailedHint': 'Clear every subagent that ended abnormally',
+      'action.clearCompleted': 'Clear done',
+      'action.clearCompletedHint': 'Clear every subagent that completed normally',
       'action.restoreAll': 'Restore all',
       'action.stop': 'Stop',
       'hidden.count': '{count} hidden',
@@ -588,7 +592,7 @@ window.__ModuleLoader__.load({
     function scanTree(listState, statuses, rootId, collapsed, hidden, now) {
       const hiddenSet = hidden || new Set();
       const collapsedSet = collapsed || new Set();
-      const result = { running: false, flashing: false, failed: false };
+      const result = { running: false, flashing: false, failed: false, completed: false, other: false };
       const seen = new Set();
       const queue = [rootId];
       while (queue.length > 0 && seen.size < 200) {
@@ -602,7 +606,9 @@ window.__ModuleLoader__.load({
           const state = entryState(entry, listState, statuses);
           if (state === 'running') result.running = true;
           else if (state === 'failed') result.failed = true;
-          else if (isFreshlyCompleted(entry, listState, statuses, now)) result.flashing = true;
+          else if (state === 'completed') result.completed = true;
+          else result.other = true;
+          if (state !== 'running' && isFreshlyCompleted(entry, listState, statuses, now)) result.flashing = true;
           if (!collapsedSet.has(entry.id)) queue.push(entry.id);
         }
       }
@@ -1503,20 +1509,25 @@ window.__ModuleLoader__.load({
         persistHidden(rootId, next);
         bumpHidden();
       };
-      /** 只清「未正常结束」的子代理，运行中与正常完成的都不动。 */
-      const dismissFailed = function () {
+      /** 只清某个状态的卡片；运行中的永远不动。 */
+      const dismissByState = function (wanted) {
         if (rootId === undefined) return;
         const next = new Set(hiddenOf(rootId));
         collectLevelIds(listState, statuses, rootId).forEach(function (levelId) {
           deriveCatalog(listState, statuses, levelId).entries.forEach(function (entry) {
             if (next.has(entry.id)) return;
-            if (entryState(entry, listState, statuses) === 'failed') next.add(entry.id);
+            const state = entryState(entry, listState, statuses);
+            if (state === wanted) next.add(entry.id);
           });
         });
         persistHidden(rootId, next);
         if (detailId !== undefined && next.has(detailId)) setDetailId(undefined);
         bumpHidden();
       };
+      /** 只清「正常完成」的子代理。 */
+      const dismissCompleted = function () { dismissByState('completed'); };
+      /** 只清「未正常结束」的子代理，运行中与正常完成的都不动。 */
+      const dismissFailed = function () { dismissByState('failed'); };
       const restoreAll = function () {
         if (rootId === undefined) return;
         persistHidden(rootId, new Set());
@@ -1599,6 +1610,9 @@ window.__ModuleLoader__.load({
         return entryState(e, listState, statuses) !== 'running';
       });
       const hasFailed = scan.failed;
+      const hasCompleted = scan.completed;
+      // 垃圾桶只在「还有既非完成也非失败的已结束卡片」时才出现，否则两个文字按钮已经覆盖。
+      const hasOtherFinished = scan.other || (!hasCompleted && !hasFailed && hasFinished);
 
       return h('div', { className: 'dspRoot', 'data-subagent-inspector': '' },
         h('div', { className: 'dspHead' },
@@ -1607,7 +1621,14 @@ window.__ModuleLoader__.load({
           runningCount > 0 ? h('span', { key: 'spin', className: 'dspSpin', 'aria-hidden': true }) : null,
           progress !== '' ? h('span', { key: 'progress', className: 'dspProgress', title: progress }, progress) : null,
           h('span', { key: 'spring', className: 'dspSpring' }),
-          // 一键清理失败子代理：文字按钮，比再放一个图标更好认。
+          // 一键清完成 / 清失败：都是文字按钮，比并排两个图标更好认。
+          hasCompleted
+            ? h('button', {
+              key: 'clearCompleted', type: 'button', className: 'dspLinkButton',
+              title: t('action.clearCompletedHint'), 'aria-label': t('action.clearCompletedHint'),
+              onClick: function () { dismissCompleted(); },
+            }, t('action.clearCompleted'))
+            : null,
           hasFailed
             ? h('button', {
               key: 'clearFailed', type: 'button', className: 'dspLinkButton',
@@ -1615,7 +1636,7 @@ window.__ModuleLoader__.load({
               onClick: function () { dismissFailed(); },
             }, t('action.clearFailed'))
             : null,
-          hasFinished
+          hasOtherFinished
             ? h('button', {
               key: 'clear', type: 'button', className: 'dspIconButton',
               title: t('action.clearFinished'), 'aria-label': t('action.clearFinished'),
