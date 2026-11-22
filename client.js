@@ -268,6 +268,8 @@ window.__ModuleLoader__.load({
       'action.clearCompletedHint': '一键清理已正常完成的子代理',
       'action.restoreAll': '全部恢复',
       'action.stop': '停止',
+      'action.stopHint': '终止这个正在运行的子代理',
+      'action.clearBlocked': '运行中不可清除，请先停止',
       'hidden.count': '已隐藏 {count}',
       'hidden.note': '清除只影响本面板显示，未删除任何会话',
       'detail.openMain': '在主面板打开',
@@ -332,6 +334,8 @@ window.__ModuleLoader__.load({
       'action.clearCompletedHint': 'Clear every subagent that completed normally',
       'action.restoreAll': 'Restore all',
       'action.stop': 'Stop',
+      'action.stopHint': 'Stop this running subagent',
+      'action.clearBlocked': 'Running — stop it before clearing',
       'hidden.count': '{count} hidden',
       'hidden.note': 'Clearing only hides rows here; no session is deleted',
       'detail.openMain': 'Open in main view',
@@ -770,6 +774,16 @@ window.__ModuleLoader__.load({
       let ns;
       try { ns = getPluginService('remote.subagents'); } catch (e) { ns = undefined; }
       if (ns !== undefined && ns !== null && typeof ns.interruptByUser === 'function') return ns;
+      // 退路：完整键取不到时，试着从 remote 容器上拿命名空间。
+      // 这一步必须包在 try 里 —— 容器上的属性访问在未注入时会抛，而这里在渲染路径上。
+      let container;
+      try { container = getPluginService('remote'); } catch (e) { container = undefined; }
+      if (container !== undefined && container !== null) {
+        try {
+          const fromContainer = container.subagents;
+          if (fromContainer && typeof fromContainer.interruptByUser === 'function') return fromContainer;
+        } catch (e) { /* 依旧拿不到 */ }
+      }
       return undefined;
     }
 
@@ -782,11 +796,10 @@ window.__ModuleLoader__.load({
         return {
           mainAvailable: ws !== undefined && typeof ws.openSession === 'function',
           asideAvailable: sb !== undefined && typeof sb.openResource === 'function',
-          stopAvailable: remoteSubagents() !== undefined,
         };
       } catch (e) {
         console.error('[subagent-panel] capability probe failed; degrading:', e);
-        return { mainAvailable: false, asideAvailable: false, stopAvailable: false };
+        return { mainAvailable: false, asideAvailable: false };
       }
     }
 
@@ -1271,10 +1284,30 @@ window.__ModuleLoader__.load({
       }, h('rect', { x: 6, y: 6, width: 12, height: 12, rx: 2, fill: 'currentColor' }));
     }
 
-    /** 状态符号：运行中=品牌色弧线动画，成功=绿，异常结束=红，未运行=空心灰。 */
+    /**
+     * 运行中的指示：与主 UI 一致 —— 一个**描边 SVG 弧线**按 `1s linear` 旋转
+     * （官方用的是 IconLoadingOutlineRegular + 同名 spin keyframes）。
+     * 早前版本的 CSS 边框圆环在 10px 直径上边框占 40%，看起来又粗又歪。
+     */
+    function SpinArc(props) {
+      const size = props && props.size ? props.size : 12;
+      return h('svg', {
+        width: size, height: size, viewBox: '0 0 24 24', 'aria-hidden': true,
+        className: 'dspSpin',
+        style: { flex: 'none', display: 'block' },
+      }, h('circle', {
+        cx: 12, cy: 12, r: 9,
+        fill: 'none', stroke: 'currentColor',
+        strokeWidth: 2.2, strokeLinecap: 'round',
+        // 留出约 1/5 的缺口，旋转时才看得出在转
+        strokeDasharray: '42 15',
+      }));
+    }
+
+    /** 状态符号：运行中=旋转弧线，成功=绿，异常结束=红，未运行=空心灰。 */
     function StatusGlyph(props) {
       const state = props.state;
-      if (state === 'running') return h('span', { className: 'dspSpin', 'aria-hidden': true });
+      if (state === 'running') return h(SpinArc, { size: 12 });
       if (state === 'completed') return h('span', { className: 'dspDot', 'data-state': 'completed', 'aria-hidden': true });
       if (state === 'failed') return h('span', { className: 'dspDot', 'data-state': 'failed', 'aria-hidden': true });
       return h('span', { className: 'dspDot', 'data-state': 'idle', 'aria-hidden': true });
@@ -1357,7 +1390,8 @@ window.__ModuleLoader__.load({
       '.dspDot[data-state="completed"]{background:var(--dsw-alias-state-success-primary);}',
       '.dspDot[data-state="failed"]{background:var(--dsw-alias-state-error-primary);}',
       '.dspDot[data-state="idle"]{border:1.5px solid var(--dsw-alias-state-idle-primary);opacity:.9;}',
-      '.dspSpin{width:10px;height:10px;border-radius:50%;border:2px solid var(--dsw-alias-brand-primary);border-bottom-color:transparent;animation:dspSpin .9s linear infinite;}',
+      // 与主 UI 一致：描边弧线整体旋转，1s 线性循环。
+      '.dspSpin{animation:dspSpin 1s linear infinite;transform-origin:50% 50%;}',
       '@keyframes dspSpin{to{transform:rotate(360deg);}}',
 
       '.dspTree{display:flex;flex-direction:column;gap:9px;}',
@@ -1383,6 +1417,8 @@ window.__ModuleLoader__.load({
       '@media(hover:hover){.dspRowClear:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,0.12));color:var(--dsw-alias-state-error-primary);opacity:1;}}',
       '.dspRowClear:focus-visible{background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,0.12));color:var(--dsw-alias-state-error-primary);opacity:1;outline:2px solid var(--dsw-alias-state-error-primary);outline-offset:1px;}',
       '@media(hover:hover){.dspNode:hover .dspRowClear{opacity:1;}}',
+      // 门控态：运行中的卡片不提供清除，占位按钮保持布局但不可点、不可聚焦。
+      '.dspRowClear[data-gated="true"],.dspDetailButton[data-gated="true"]{opacity:.35;cursor:default;pointer-events:none;}',
 
       '.dspChildren{display:flex;flex-direction:column;gap:6px;margin:6px 0 0 10px;padding-left:8px;border-left:1px solid var(--dsw-alias-border-l2);}',
 
@@ -1618,7 +1654,7 @@ window.__ModuleLoader__.load({
         h('div', { className: 'dspHead' },
           h('span', { key: 'lead', className: 'dspLead', 'aria-hidden': true }, h(PanelIcon, { size: 14 })),
           h('span', { key: 'title', className: 'dspTitle' }, t('panel.title')),
-          runningCount > 0 ? h('span', { key: 'spin', className: 'dspSpin', 'aria-hidden': true }) : null,
+          runningCount > 0 ? h(SpinArc, { key: 'spin', size: 12 }) : null,
           progress !== '' ? h('span', { key: 'progress', className: 'dspProgress', title: progress }, progress) : null,
           h('span', { key: 'spring', className: 'dspSpring' }),
           // 一键清完成 / 清失败：都是文字按钮，比并排两个图标更好认。
@@ -1845,6 +1881,8 @@ window.__ModuleLoader__.load({
             event.preventDefault();
             event.stopPropagation();
           }
+          // 门控：运行中的子代理不可清除，必须先终止。
+          if (running) return;
           dismiss(entry.id);
         };
 
@@ -1926,12 +1964,18 @@ window.__ModuleLoader__.load({
               onClick: onAside,
             }, h(ArrowUpRightIcon, { size: 13 })),
           // 卡片右上角的单个清除：不必展开详情即可把这张卡从面板移除（仅隐藏，不动会话）。
-          h('button', {
-            key: 'clearRow', type: 'button', className: 'dspRowClear', tabIndex: -1,
-            'aria-label': t('action.clearRow', { label: primaryLabel }),
-            title: t('action.clearRow', { label: primaryLabel }) + ' — ' + t('hidden.note'),
-            onClick: onClear,
-          }, h(TrashIcon, { size: 11 })),
+          // 运行中的卡片不给清除入口：先终止，再清除。
+          running
+            ? h('span', {
+              key: 'clearRow', className: 'dspRowClear', 'data-gated': 'true',
+              title: t('action.clearBlocked'), 'aria-hidden': true,
+            }, h(TrashIcon, { size: 11 }))
+            : h('button', {
+              key: 'clearRow', type: 'button', className: 'dspRowClear', tabIndex: -1,
+              'aria-label': t('action.clearRow', { label: primaryLabel }),
+              title: t('action.clearRow', { label: primaryLabel }) + ' — ' + t('hidden.note'),
+              onClick: onClear,
+            }, h(TrashIcon, { size: 11 })),
         ];
 
         const cardChildren = [
@@ -2034,18 +2078,26 @@ window.__ModuleLoader__.load({
                 : null,
             ),
             h('div', { key: 'actions2', className: 'dspDetailActionsSecondary' },
-              (!inert && running && capabilities.stopAvailable)
+              // 终止键：运行中的卡片一律提供，点了才去尝试；失败会在面板顶部报出来。
+              (!inert && running)
                 ? h('button', {
                   key: 'stop', type: 'button', className: 'dspDetailButton',
+                  title: t('action.stopHint'),
                   onClick: onStop,
                 }, h(StopIcon, { size: 10 }), t('action.stop'))
                 : null,
-              h('button', {
-                key: 'clear', type: 'button', className: 'dspDetailButton',
-                'data-danger': 'true',
-                title: t('hidden.note'),
-                onClick: onClear,
-              }, h(TrashIcon, { size: 11 }), t('action.clear')),
+              // 清除同样受门控：运行中不给入口。
+              running
+                ? h('span', {
+                  key: 'clear', className: 'dspDetailButton', 'data-gated': 'true',
+                  title: t('action.clearBlocked'), 'aria-hidden': true,
+                }, h(TrashIcon, { size: 11 }), t('action.clear'))
+                : h('button', {
+                  key: 'clear', type: 'button', className: 'dspDetailButton',
+                  'data-danger': 'true',
+                  title: t('hidden.note'),
+                  onClick: onClear,
+                }, h(TrashIcon, { size: 11 }), t('action.clear')),
             ),
             h('p', { key: 'tTitle', className: 'dspTranscriptTitle' }, t('detail.transcript')),
             h(TranscriptPreview, {
