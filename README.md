@@ -13,7 +13,7 @@ A subagent panel for the **DeepSeek Harness** right sidebar. It shows the subage
 - **Four colour-coded states.** Running (animated accent arc), completed (green), ended abnormally (red), not running (hollow grey). "Ended abnormally" is derived from the last turn's end reason, so it honestly covers aborts and token-limit stops as well as hard errors.
 - **Detail drawer per card.** Creation time, usage figures, and a longer preview with a "jump to latest" pill. While the child is running the preview follows the newest message, and pauses following the moment you scroll up.
 - **Active work first.** Branches containing a running subagent sort to the top, newest first; a parent is hoisted together with its running child so the branch never splits. Everything else keeps its original order.
-- **A finishing card flashes.** For one minute after a subagent completes, a colour band travels along the card's top edge, then stops on its own.
+- **A finishing card flashes.** For 30 seconds after a subagent completes, a colour ring rotates around the card's border, then stops on its own.
 - **Clear cards.** A card's trash control clears just that card; **清失败 / Clear failed** clears every abnormally ended subagent in one click; the header trash clears all finished cards; a hidden-count bar restores them. Clearing hides cards **in this panel only**, is remembered per conversation, and never deletes a session.
 - **Stop a running subagent** through the Harness interrupt API.
 - **Keyboard accessible** via tree semantics (`role="tree"` / `treeitem`), arrow-key roving focus, `Enter`/`Space` to open the detail, and a proper focus ring. Motion is suppressed under `prefers-reduced-motion`.
@@ -85,7 +85,7 @@ It reads only session data the client already holds and makes **no model request
 
 **在运行的排前面**：含运行中子代理的分支整体前置（父级跟着一起上去，分支不会被拆散），其中创建时间最晚的排最前；其余卡片保持原顺序。
 
-**刚完成的卡片会闪**：完成后的 1 分钟内，卡片上边缘有一段彩色条带流动，1 分钟后自动停止。
+**刚完成的卡片会闪**：完成后的 30 秒内，卡片边框有一圈旋转的彩色渐变环，30 秒后自动停止。
 
 清除父级**不会把子树一起埋掉**：子级会**上提一层**顶替它的位置，并带虚线左边框提示；连续清除两层，存活的孙辈仍会升到存活的层。可达的内容不会因为祖先被清除而消失。
 

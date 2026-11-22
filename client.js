@@ -639,7 +639,7 @@ window.__ModuleLoader__.load({
     /* ------------------------------------------------------------------ */
 
     /** 完成的卡片保持彩色条带闪动的时长。 */
-    const FLASH_WINDOW_MS = 60000;
+    const FLASH_WINDOW_MS = 30000;
 
     /** 该卡片的子级里是否还有在运行的（只要分支里有活动，整条分支就该前置）。 */
     function hasRunningDescendant(listState, statuses, id, depth) {
@@ -686,7 +686,7 @@ window.__ModuleLoader__.load({
      */
     const lastEventTimes = {};
 
-    /** 刚完成（1 分钟内）的卡片才闪条带。 */
+    /** 刚完成（30 秒内）的卡片才闪彩环。 */
     function isFreshlyCompleted(entry, listState, statuses, now) {
       if (typeof now !== 'number') return false;
       if (entryState(entry, listState, statuses) !== 'completed') return false;
@@ -1542,7 +1542,7 @@ window.__ModuleLoader__.load({
         ? { running: false, flashing: false, failed: false }
         : scanTree(listState, statuses, rootId, collapsed, hidden, now);
       const running = scan.running;
-      // 刚完成的卡片要在 1 分钟内停掉闪动，所以即使没有运行中的子代理，
+      // 刚完成的卡片要在 30 秒内停掉闪动，所以即使没有运行中的子代理，
       // 只要还有新鲜完成的卡片，时钟也得继续走一小会儿。
       const ticking = running || scan.flashing;
       React.useEffect(function () {
@@ -2057,7 +2057,7 @@ window.__ModuleLoader__.load({
           'data-state': state,
           // 原本在已清除卡片之下、被上提一层的条目
           'data-lifted': entry.lifted === true ? 'true' : undefined,
-          // 刚完成的卡片：边框走一段彩色条带动画，1 分钟后自动停
+          // 刚完成的卡片：边框走一圈旋转彩环，30 秒后自动停
           'data-flash': isFreshlyCompleted(entry, listState, statuses, now) ? 'true' : undefined,
         }, nodeChildren);
       }));
