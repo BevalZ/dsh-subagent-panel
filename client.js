@@ -644,9 +644,9 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * 排序默认值：运行中的排到前面，且**最新创建的排最前**；
-     * 某个运行中的子代理如果挂在别的卡片下面，它所属的那张卡片跟着一起前置
-     * （否则分支会被拆散）。其余卡片保持原顺序。
+     * 排序默认值：**整体按时间倒序**（最近的排最前），但含运行中子代理的分支
+     * 强制提到最前——它们内部同样按时间倒序。父级随运行中的子级一起前置，
+     * 否则分支会被拆散。
      */
     function sortLevelEntries(entries, listState, statuses) {
       const busy = [];
@@ -656,24 +656,32 @@ window.__ModuleLoader__.load({
           hasRunningDescendant(listState, statuses, entry.id);
         const createdAt = typeof entry.createdAt === 'number' && isFinite(entry.createdAt) ? entry.createdAt : 0;
         if (active) busy.push({ entry: entry, index: index, createdAt: createdAt });
-        else rest.push(entry);
+        else rest.push({ entry: entry, index: index, createdAt: createdAt });
       });
-      if (busy.length === 0) return entries;
-      busy.sort(function (a, b) {
+      const byNewest = function (a, b) {
         if (b.createdAt !== a.createdAt) return b.createdAt - a.createdAt;
         return a.index - b.index;
-      });
-      return busy.map(function (item) { return item.entry; }).concat(rest);
+      };
+      busy.sort(byNewest);
+      rest.sort(byNewest);
+      return busy.map(function (item) { return item.entry; })
+        .concat(rest.map(function (item) { return item.entry; }));
     }
+
+    /**
+     * 每张卡片「最后一次活动」的真实时间（毫秒），由卡片自己的事件流写入。
+     * 事件都带 wall-clock `time`，所以子代理结束的那一刻就是它最后一个事件的时间 ——
+     * 这比会话摘要的 updatedAt 可靠得多（后者可能被标题等无关写入刷新，也可能压根不存在）。
+     */
+    const lastEventTimes = {};
 
     /** 刚完成（1 分钟内）的卡片才闪条带。 */
     function isFreshlyCompleted(entry, listState, statuses, now) {
       if (typeof now !== 'number') return false;
       if (entryState(entry, listState, statuses) !== 'completed') return false;
-      const summary = listState.byId[entry.id];
-      const updatedAt = summary && typeof summary.updatedAt === 'number' ? summary.updatedAt : undefined;
-      if (updatedAt === undefined) return false;
-      const age = now - updatedAt;
+      const lastEventTime = lastEventTimes[entry.id];
+      if (typeof lastEventTime !== 'number' || !isFinite(lastEventTime)) return false;
+      const age = now - lastEventTime;
       return age >= 0 && age < FLASH_WINDOW_MS;
     }
 
@@ -885,8 +893,20 @@ window.__ModuleLoader__.load({
       return source.kind === 'user';
     }
 
-    function extractTranscript(win) {
-      const out = [];
+    /** 事件窗口里最后一个带时间戳的事件时间（wall clock 毫秒）。 */
+    function extractLastEventTime(win) {
+      const entries = (win && win.entries) || [];
+      for (let i = entries.length - 1; i >= 0; i--) {
+        const row = entries[i];
+        if (row === null || typeof row !== 'object' || row.type !== 'event') continue;
+        const ev = row.event;
+        if (ev === null || typeof ev !== 'object') continue;
+        if (typeof ev.time === 'number' && isFinite(ev.time)) return ev.time;
+      }
+      return undefined;
+    }
+
+    function extractTranscript(win) {      const out = [];
       const entries = (win && win.entries) || [];
       entries.forEach(function (row) {
         if (row === null || typeof row !== 'object' || row.type !== 'event') return;
@@ -1113,7 +1133,11 @@ window.__ModuleLoader__.load({
           const pull = function () {
             if (!alive) return;
             try {
-              setData(extractTranscript(source.getSnapshot()));
+              const snapshot = source.getSnapshot();
+              // 顺手记下最后一次事件的真实时间：它就是「完成时刻」的时间源。
+              const lastTime = extractLastEventTime(snapshot);
+              if (typeof lastTime === 'number') lastEventTimes[address.childSessionId] = lastTime;
+              setData(extractTranscript(snapshot));
             } catch (e) {
               console.error('[subagent-panel] card preview read failed:', e);
               setFailed(true);
@@ -1336,8 +1360,8 @@ window.__ModuleLoader__.load({
       // 被上提的卡片（原来在已清除的父级之下）用虚线左边框提示它换了一层。
       '.dspNode[data-lifted="true"]>.dspCard{border-left-style:dashed;border-left-width:2px;border-left-color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary));}',
       // 刚完成的卡片：一条彩色条带沿上边缘流动，1 分钟后（data-flash 撤掉）自然停止。
-      '.dspNode[data-flash="true"]>.dspCard::before{content:"";position:absolute;left:0;right:0;top:0;height:2px;border-radius:var(--dsw-radius-md,12px) var(--dsw-radius-md,12px) 0 0;background:linear-gradient(90deg,#34c759,#0a84ff,#bf5af2,#ff9f0a,#34c759);background-size:220% 100%;animation:dspBand 1.5s linear infinite;pointer-events:none;}',
-      '.dspNode[data-flash="true"]>.dspCard{border-color:var(--dsw-alias-border-l2);}',
+      '.dspNode[data-flash="true"]>.dspCard::before{content:"";position:absolute;left:0;right:0;top:0;height:3px;border-radius:var(--dsw-radius-md,12px) var(--dsw-radius-md,12px) 0 0;background:linear-gradient(90deg,#34c759,#0a84ff,#bf5af2,#ff9f0a,#34c759);background-size:220% 100%;animation:dspBand 1.5s linear infinite;pointer-events:none;z-index:1;}',
+      '.dspNode[data-flash="true"]>.dspCard{border-color:var(--dsw-alias-border-l2);box-shadow:0 0 0 1px rgba(10,132,255,0.28),0 2px 10px rgba(10,132,255,0.16);}',
       '@keyframes dspBand{from{background-position:0% 0;}to{background-position:220% 0;}}',
       '.dspLabel{color:inherit;flex:1 1 auto;min-width:0;font-size:13px;font-weight:400;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}',
       '.dspNode[data-current="true"] .dspLabel{font-weight:500;}',
