@@ -507,8 +507,33 @@ window.__ModuleLoader__.load({
       };
     }
 
-    function progressLabel(entries, listState, statuses, t) {
-      let completed = 0, active = 0, failed = 0, inactive = 0, external = 0;
+    /** 提升计算的最大层数：防止异常数据造成环或过深递归。 */
+    const LIFT_MAX_DEPTH = 6;
+
+    /**
+     * 过滤掉已清除的卡片，并把它们的下属**上提一层**替换原来的位置。
+     * 只清掉外层不该带走整棵子树：被清除的节点让位给它的子级，子级在
+     * 当前层级原地出现（缩进也随之少一级），视觉上就是「升了一层」。
+     * 被提升的条目带 `lifted` 标记，供渲染层给出提示。
+     */
+    function liftHiddenLevels(listState, statuses, entries, hiddenSet, depth) {
+      const level = typeof depth === 'number' ? depth : 0;
+      const out = [];
+      entries.forEach(function (entry) {
+        if (!hiddenSet.has(entry.id)) { out.push(entry); return; }
+        if (level >= LIFT_MAX_DEPTH) return;
+        // 该卡片已被清除：把它的子级接到当前层。
+        const nested = deriveCatalog(listState, statuses, entry.id);
+        if (nested.state !== 'ready' || nested.entries.length === 0) return;
+        liftHiddenLevels(listState, statuses, nested.entries, hiddenSet, level + 1)
+          .forEach(function (child) {
+            out.push(Object.assign({}, child, { lifted: true }));
+          });
+      });
+      return out;
+    }
+
+    function progressLabel(entries, listState, statuses, t) {      let completed = 0, active = 0, failed = 0, inactive = 0, external = 0;
       entries.forEach(function (entry) {
         const state = entryState(entry, listState, statuses);
         if (state === 'external') external++;
@@ -545,20 +570,25 @@ window.__ModuleLoader__.load({
      * 可见层级中是否还有运行中的子代理（决定是否启动秒级时钟）。
      * 已从面板清除的行不计入，否则隐藏一个运行中的子级会让面板永远每秒重渲染。
      */
+    /**
+     * 可见层级里是否还有运行中的子代理（决定是否启动秒级时钟）。
+     * 沿两条边下探：用户展开的分支，以及**被清除但子级被上提**的分支——
+     * 后者的子级仍在屏幕上，它们的耗时也必须继续跳动。
+     */
     function anyRunningVisible(listState, statuses, rootId, expanded, hidden) {
       const hiddenSet = hidden || new Set();
-      const isRunningEntry = function (entry) {
-        return !hiddenSet.has(entry.id) && entry.activity === 'running';
-      };
-      const rootCatalog = deriveCatalog(listState, statuses, rootId);
-      for (let i = 0; i < rootCatalog.entries.length; i++) {
-        if (isRunningEntry(rootCatalog.entries[i])) return true;
-      }
-      const ids = Array.from(expanded);
-      for (let i = 0; i < ids.length; i++) {
-        const level = deriveCatalog(listState, statuses, ids[i]);
-        for (let j = 0; j < level.entries.length; j++) {
-          if (isRunningEntry(level.entries[j])) return true;
+      const queue = [rootId];
+      const seen = new Set();
+      while (queue.length > 0 && seen.size < 200) {
+        const id = queue.shift();
+        if (typeof id !== 'string' || seen.has(id)) continue;
+        seen.add(id);
+        const catalog = deriveCatalog(listState, statuses, id);
+        for (let i = 0; i < catalog.entries.length; i++) {
+          const entry = catalog.entries[i];
+          if (hiddenSet.has(entry.id)) { queue.push(entry.id); continue; }
+          if (entry.activity === 'running') return true;
+          if (expanded.has(entry.id)) queue.push(entry.id);
         }
       }
       return false;
@@ -1180,6 +1210,8 @@ window.__ModuleLoader__.load({
       '@keyframes dspSpin{to{transform:rotate(360deg);}}',
 
       '.dspTree{display:flex;flex-direction:column;gap:9px;}',
+      // 被上提的卡片（原来在已清除的父级之下）用虚线左边框提示它换了一层。
+      '.dspNode[data-lifted="true"]>.dspCard{border-left-style:dashed;border-left-width:2px;border-left-color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary));}',
       '.dspLabel{color:inherit;flex:1 1 auto;min-width:0;font-size:13px;font-weight:400;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}',
       '.dspNode[data-current="true"] .dspLabel{font-weight:500;}',
       '.dspSecondary{flex:1 1 auto;min-width:0;color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary));font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}',
@@ -1299,6 +1331,9 @@ window.__ModuleLoader__.load({
         persistHidden(rootId, next);
         if (detailId === childId) setDetailId(undefined);
         bumpHidden();
+        // 被清除的卡片让位给它的子级：先把这个分支的目录拉起来，
+        // 否则上提时读不到子级、子树会整块消失。
+        void prepareLevel(childId);
       };
       /** 批量清除：覆盖根层与所有已展开层级里"非运行中"的行。 */
       const dismissFinished = function () {
@@ -1473,7 +1508,7 @@ window.__ModuleLoader__.load({
 
       const catalog = deriveCatalog(listState, statuses, parentId);
       const hiddenSet = hidden || new Set();
-      const entries = catalog.entries.filter(function (e) { return !hiddenSet.has(e.id); });
+      const entries = liftHiddenLevels(listState, statuses, catalog.entries, hiddenSet);
 
       if (entries.length === 0) {
         if (catalog.state === 'error') {
@@ -1821,6 +1856,8 @@ window.__ModuleLoader__.load({
           'data-open': isExpanded ? 'true' : 'false',
           'data-current': isCurrent ? 'true' : 'false',
           'data-state': state,
+          // 原本在已清除卡片之下、被上提一层的条目
+          'data-lifted': entry.lifted === true ? 'true' : undefined,
         }, nodeChildren);
       }));
     }
