@@ -275,6 +275,8 @@ window.__ModuleLoader__.load({
       'card.loading': '读取中…',
       'card.empty': '暂无内容',
       'card.failed': '对话不可读',
+      'card.provider': '供应商',
+      'card.model': '模型',
       'role.user': '用户',
       'role.assistant': '子智能体',
       'branch.expand': '展开子级',
@@ -333,6 +335,8 @@ window.__ModuleLoader__.load({
       'card.loading': 'Loading…',
       'card.empty': 'No content yet',
       'card.failed': 'Conversation unavailable',
+      'card.provider': 'via',
+      'card.model': 'model',
       'role.user': 'User',
       'role.assistant': 'Subagent',
       'branch.expand': 'Expand branch',
@@ -438,6 +442,26 @@ window.__ModuleLoader__.load({
       return row && row.projectionValues ? row.projectionValues[key] : undefined;
     }
 
+    /**
+     * 该子会话实际使用的供应商与模型。
+     * 来自子会话自己的 `modelSelection` 投影（`{ lastUsed, pending }`，每项是
+     * `{ provider, model, reasoningEffort? }`）：`lastUsed` 是最近一次真正发出去请求
+     * 用到的选择，`pending` 是已选但还没发出去的选择，所以优先 lastUsed。
+     * 目录条目本身不含模型信息，这里读的是会话投影；读不到就不显示，不猜。
+     */
+    function selectionOf(listState, id) {
+      const projected = projectionValue(listState, id, 'modelSelection');
+      if (projected === undefined || projected === null) return undefined;
+      const pick = projected.lastUsed || projected.pending;
+      if (pick === undefined || pick === null) return undefined;
+      if (typeof pick.provider !== 'string' || typeof pick.model !== 'string') return undefined;
+      return {
+        provider: pick.provider,
+        model: pick.model,
+        reasoningEffort: typeof pick.reasoningEffort === 'string' ? pick.reasoningEffort : undefined,
+      };
+    }
+
     /* ------------------------------------------------------------------ */
     /* 状态模型：running / completed / failed / idle / external            */
     /* ------------------------------------------------------------------ */
@@ -481,11 +505,6 @@ window.__ModuleLoader__.load({
         error: snapshot === undefined ? null : (snapshot.error || null),
         entries: entries,
       };
-    }
-
-    function entryNameOf(entry) {
-      if (entry.mode === 'continuable' || entry.mode === 'external') return entry.name || entry.id;
-      return entry.id;
     }
 
     function progressLabel(entries, listState, statuses, t) {
@@ -1113,14 +1132,16 @@ window.__ModuleLoader__.load({
       '.dspActionErrorText{flex:1 1 auto;min-width:0;overflow-wrap:anywhere;}',
 
       '.dspNode{position:relative;min-width:0;}',
-      // 每张卡片：浅底 + 细边 + 圆角，内部两段（标题行 / 最近三行对话）。
-      '.dspCard{position:relative;display:flex;flex-direction:column;box-sizing:border-box;width:100%;margin:0;padding:6px 7px 7px;border:1px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-md,12px);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;line-height:17px;text-align:left;cursor:pointer;transition:background 120ms ease,border-color 120ms ease;}',
+      // 每张卡片：浅底 + 描边 + 轻微投影，卡片之间留足间距，便于一眼区分。
+      '.dspCard{position:relative;display:flex;flex-direction:column;box-sizing:border-box;width:100%;margin:0;padding:7px 8px 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsw-radius-md,12px);background:var(--dsw-alias-bg-layer-1);box-shadow:0 1px 2px rgba(0,0,0,0.04);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;line-height:17px;text-align:left;cursor:pointer;transition:background 120ms ease,border-color 120ms ease,box-shadow 120ms ease;}',
       '.dspCard:focus-visible{border-color:var(--dsw-alias-border-l2);outline:2px solid var(--dsw-alias-brand-primary,rgba(127,127,127,0.6));outline-offset:-2px;}',
-      '@media(hover:hover){.dspCard:hover{background:var(--dsw-alias-bg-layer-2);border-color:var(--dsw-alias-border-l2);}}',
+      '@media(hover:hover){.dspCard:hover{background:var(--dsw-alias-bg-layer-2);border-color:var(--dsw-alias-border-l2);box-shadow:0 2px 6px rgba(0,0,0,0.07);}}',
       '.dspCard[aria-disabled="true"]{cursor:default;color:var(--dsw-alias-label-secondary);}',
-      '@media(hover:hover){.dspCard[aria-disabled="true"]:hover{background:var(--dsw-alias-bg-layer-1);border-color:var(--dsw-alias-border-l1);}}',
+      '@media(hover:hover){.dspCard[aria-disabled="true"]:hover{background:var(--dsw-alias-bg-layer-1);border-color:var(--dsw-alias-border-l2);box-shadow:0 1px 2px rgba(0,0,0,0.04);}}',
       '.dspCardHead{display:flex;align-items:flex-start;gap:7px;min-width:0;}',
       '.dspCardTitle{display:flex;flex:1;flex-direction:column;min-width:0;}',
+      '.dspSubLine{display:flex;align-items:baseline;gap:6px;min-width:0;}',
+      '.dspId{flex:none;opacity:.55;font-variant-numeric:tabular-nums;letter-spacing:.02em;}',
       // 最近三行：每行一条消息，单行省略，不再折行撑高卡片。
       '.dspCardLines{display:flex;flex-direction:column;gap:1px;margin:4px 0 0 21px;min-width:0;}',
       '.dspLine{display:flex;gap:5px;min-width:0;font-size:11px;line-height:15px;color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary));}',
@@ -1137,6 +1158,19 @@ window.__ModuleLoader__.load({
       '.dspNode[data-open="true"]>.dspCard>.dspCardHead>.dspDisclosure svg{transform:rotate(90deg);}',
       '.dspDisclosureSpace{flex:none;width:14px;height:17px;}',
 
+      // 身份标记：每个子智能体一个首字徽标，避免多张卡片彼此看混。
+      '.dspAvatar{display:grid;place-items:center;flex:none;width:20px;height:20px;margin-top:1px;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsw-radius-sm,8px);background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font-size:11px;font-weight:600;line-height:1;}',
+      '.dspAvatar[data-tone="external"]{color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary));border-style:dashed;}',
+      '.dspTitleLine{display:flex;align-items:center;gap:5px;min-width:0;}',
+
+      // 供应商 / 模型（上下两行，位于 token 之前）与 token / 耗时并排。
+      '.dspMetrics{display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:8px;flex:none;margin-left:8px;max-width:64%;color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary));font-size:10px;line-height:15px;text-align:right;font-variant-numeric:tabular-nums;}',
+      '.dspMetricPair{display:flex;flex-direction:column;min-width:0;}',
+      '.dspMetricRow{display:flex;justify-content:flex-end;gap:3px;min-width:0;}',
+      '.dspMetricLabel{flex:none;opacity:.7;}',
+      '.dspMetricValue{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
+      '.dspMetricValues{display:flex;flex-direction:column;white-space:nowrap;}',
+
       '.dspActivity{display:inline-flex;align-items:center;justify-content:center;flex:none;width:14px;height:17px;}',
       '.dspDot{width:8px;height:8px;border-radius:50%;box-sizing:border-box;}',
       '.dspDot[data-state="completed"]{background:var(--dsw-alias-state-success-primary);}',
@@ -1145,14 +1179,11 @@ window.__ModuleLoader__.load({
       '.dspSpin{width:10px;height:10px;border-radius:50%;border:2px solid var(--dsw-alias-brand-primary);border-bottom-color:transparent;animation:dspSpin .9s linear infinite;}',
       '@keyframes dspSpin{to{transform:rotate(360deg);}}',
 
-      '.dspTree{display:flex;flex-direction:column;gap:6px;}',
-      '.dspLabel{color:inherit;font-size:13px;font-weight:400;white-space:normal;overflow-wrap:anywhere;}',
+      '.dspTree{display:flex;flex-direction:column;gap:9px;}',
+      '.dspLabel{color:inherit;flex:1 1 auto;min-width:0;font-size:13px;font-weight:400;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}',
       '.dspNode[data-current="true"] .dspLabel{font-weight:500;}',
-      '.dspSecondary{color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary));font-size:12px;white-space:normal;overflow-wrap:anywhere;}',
+      '.dspSecondary{flex:1 1 auto;min-width:0;color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary));font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}',
       '.dspNode[data-state="failed"] .dspSecondary{color:var(--dsw-alias-state-error-primary);}',
-      // 两行堆叠（token / 时长），与官方目录一致：单行 nowrap 会在窄侧栏里把主标题挤没。
-      '.dspMetrics{flex:none;margin-left:8px;display:grid;grid-template-rows:17px 15px;align-items:center;color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary));font-size:10px;line-height:15px;font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap;}',
-      '.dspMetric{display:block;}',
 
       '.dspAsideButton{display:inline-flex;align-items:center;justify-content:center;flex:none;width:28px;height:24px;margin:2px 0;padding:0;border:0;border-radius:var(--dsw-radius-sm,8px);background:transparent;color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary));cursor:pointer;transition:color 120ms ease,background 120ms ease;}',
       '.dspAsideButton:focus-visible{background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,0.12));color:var(--dsw-alias-label-primary);outline:2px solid var(--dsw-alias-brand-primary,rgba(127,127,127,0.6));outline-offset:1px;}',
@@ -1483,9 +1514,11 @@ window.__ModuleLoader__.load({
         const running = state === 'running';
 
         const description = entry.label || (summary !== undefined ? summary.title : undefined);
-        const name = entryNameOf(entry);
-        const primaryLabel = description || name;
-        const secondaryLabel = description ? name : undefined;
+        // 只用目录里真正的 name（continuable / external 才有）。
+        // 旧写法回退到会话 id，会让一次性子代理的副标题塞满一长串 id，卡片彼此更难分辨。
+        const name = typeof entry.name === 'string' && entry.name !== '' ? entry.name : undefined;
+        const primaryLabel = description || name || '#' + String(entry.id).slice(-4);
+        const secondaryLabel = description && name !== undefined ? name : undefined;
 
         const mode = external ? t('mode.external')
           : entry.mode === 'unknown' ? t('mode.unknown')
@@ -1567,6 +1600,10 @@ window.__ModuleLoader__.load({
           mode: external ? 'unknown' : entry.mode,
         };
 
+        // 该子会话实际使用的供应商与模型
+        const selection = inert ? undefined : selectionOf(listState, entry.id);
+        const avatarText = external ? '外' : Array.from(primaryLabel)[0] || '·';
+
         const cardHead = [
           expandable
             ? h('button', {
@@ -1576,19 +1613,55 @@ window.__ModuleLoader__.load({
               onClick: onToggleBranch,
             }, h(ChevronIcon, { size: 12 }))
             : (reserveDisclosure ? h('span', { key: 'discSpace', className: 'dspDisclosureSpace' }) : null),
+          // 首字徽标：多张卡片并排时最省力的区分锚点。
           h('span', {
-            key: 'act', className: 'dspActivity',
-            title: stateLabel, 'aria-hidden': true,
-          }, h(StatusGlyph, { state: state })),
+            key: 'avatar', className: 'dspAvatar',
+            'data-tone': external ? 'external' : undefined,
+            title: primaryLabel, 'aria-hidden': true,
+          }, avatarText),
           h('span', { key: 'content', className: 'dspCardTitle' },
-            h('span', { key: 'label', className: 'dspLabel' }, primaryLabel),
-            secondary !== '' ? h('span', { key: 'secondary', className: 'dspSecondary' }, secondary) : null,
+            h('span', { key: 'titleLine', className: 'dspTitleLine' },
+              h('span', {
+                key: 'act', className: 'dspActivity',
+                title: stateLabel, 'aria-hidden': true,
+              }, h(StatusGlyph, { state: state })),
+              h('span', { key: 'label', className: 'dspLabel' }, primaryLabel),
+            ),
+            h('span', { key: 'subLine', className: 'dspSubLine' },
+              secondary !== ''
+                ? h('span', { key: 'text', className: 'dspSecondary' }, secondary)
+                : null,
+              h('span', { key: 'id', className: 'dspId', title: entry.id }, '#' + String(entry.id).slice(-4)),
+            ),
           ),
-          metrics !== ''
+          // 供应商 / 模型（上下两行）在前，token / 耗时在后。
+          (selection !== undefined || metricRows.length > 0)
             ? h('span', { key: 'metrics', className: 'dspMetrics', title: metrics },
-              metricRows.map(function (line, index) {
-                return h('span', { key: 'm' + index, className: 'dspMetric' }, line);
-              }))
+              h('span', { key: 'pair', className: 'dspMetricPair' },
+                selection !== undefined
+                  ? h('span', {
+                    key: 'prov', className: 'dspMetricRow',
+                    title: t('card.provider') + ': ' + selection.provider,
+                  },
+                    h('span', { key: 'pl', className: 'dspMetricLabel' }, t('card.provider')),
+                    h('span', { key: 'pv', className: 'dspMetricValue' }, selection.provider),
+                  )
+                  : null,
+                selection !== undefined
+                  ? h('span', {
+                    key: 'model', className: 'dspMetricRow',
+                    title: t('card.model') + ': ' + selection.model,
+                  },
+                    h('span', { key: 'ml', className: 'dspMetricLabel' }, t('card.model')),
+                    h('span', { key: 'mv', className: 'dspMetricValue' }, selection.model),
+                  )
+                  : null,
+              ),
+              h('span', { key: 'values', className: 'dspMetricValues' },
+                metricRows.map(function (line, index) {
+                  return h('span', { key: 'v' + index, className: 'dspMetricValue' }, line);
+                })),
+            )
             : null,
           external || migration || !navState().asideAvailable
             ? h('span', { key: 'tail', className: 'dspAsideButton', 'aria-hidden': true })
