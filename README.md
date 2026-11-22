@@ -6,10 +6,11 @@ A subagent panel for the **DeepSeek Harness** right sidebar. It shows the subage
 
 ## Features
 
+- **One card per subagent**, each showing the **latest three lines** of that subagent's conversation, live: every card retains its own child session and subscribes to its event stream, so new messages slide in without a refresh.
 - **Live tree** of the current conversation's subagents — direct children, plus grandchildren you expand. Token usage and active duration update as the session publishes.
 - **Four colour-coded states.** Running (animated accent arc), completed (green), ended abnormally (red), not running (hollow grey). "Ended abnormally" is derived from the last turn's end reason, so it honestly covers aborts and token-limit stops as well as hard errors.
-- **Detail drawer per row.** Creation time, usage figures, and a preview of recent messages with a "jump to latest" pill. While the child is running the preview follows the newest message, and pauses following the moment you scroll up.
-- **Clear rows.** The trash control at the end of a row clears just that row; the header can clear every finished row at once; a hidden-count bar restores them. Clearing hides rows **in this panel only**, is remembered per conversation, and never deletes a session.
+- **Detail drawer per card.** Creation time, usage figures, and a longer preview with a "jump to latest" pill. While the child is running the preview follows the newest message, and pauses following the moment you scroll up.
+- **Clear cards.** The trash control at the end of a card clears just that card; the header can clear every finished card at once; a hidden-count bar restores them. Clearing hides cards **in this panel only**, is remembered per conversation, and never deletes a session.
 - **Stop a running subagent** through the Harness interrupt API.
 - **Keyboard accessible** via tree semantics (`role="tree"` / `treeitem`), arrow-key roving focus, `Enter`/`Space` to open the detail, and a proper focus ring. Motion is suppressed under `prefers-reduced-motion`.
 - **Chinese and English** UI, following the app locale.
@@ -64,20 +65,21 @@ It reads only session data the client already holds and makes **no model request
 
 ## Known limitations
 
+- Every visible card retains its child session so it can show live lines. With dozens of subagents in one conversation that is dozens of live subscriptions; collapse branches you do not care about, or clear the cards you no longer need.
 - Clearing is view-level: the session log and the subagent sessions themselves are untouched.
-- The per-row icon buttons are not in the Tab order; the keyboard path is `Enter` on the row, then the drawer's buttons.
-- The cleared-row set is stored in `localStorage` per conversation and is never evicted.
+- The per-card icon buttons are not in the Tab order; the keyboard path is `Enter` on the card, then the drawer's buttons.
+- The cleared-card set is stored in `localStorage` per conversation and is never evicted.
 - On unload the plugin closes only the tabs of conversations this window has adopted.
 
 ## 中文说明
 
-**子智能体面板**是 DeepSeek Harness 右侧栏的插件：列出当前对话的子智能体树，状态四色区分（运行中／已完成／未正常结束／未运行），用量与耗时随会话事件自动更新。
+**子智能体面板**是 DeepSeek Harness 右侧栏的插件：**每个子智能体是一张卡片**，卡片底部实时显示该子代理**最近三行**对话——每张卡片各自 retain 其子会话并订阅事件流，新消息无需刷新就会滑入。状态四色区分（运行中／已完成／未正常结束／未运行），用量与耗时随会话事件自动更新。
 
-点任意一行展开详情：创建时间、用量、最近几条对话预览。运行中的子智能体会**自动跟随最新消息**滚动，你手动上滚则暂停并出现「跳到最新」。
+点卡片展开详情：创建时间、用量、更长的对话预览。运行中的子智能体会**自动跟随最新消息**滚动，你手动上滚则暂停并出现「跳到最新」。
 
 有三种打开方式：侧栏为空且当前对话已有子智能体时**自动放入**；按 **Ctrl+Shift+S**；或侧栏「+」里的「子智能体」卡片。关掉之后按对话记住，不会再自动出现。
 
-行尾垃圾桶可单独清除一行，头部可一键清除已结束的，也能全部恢复——**清除只影响本面板显示，不删除任何会话**。运行中的子智能体可以停止。
+行尾垃圾桶可单独清除一张卡片，头部可一键清除已结束的，也能全部恢复——**清除只影响本面板显示，不删除任何会话**。运行中的子智能体可以停止。
 
 安装：
 

@@ -272,6 +272,9 @@ window.__ModuleLoader__.load({
       'detail.streaming': '正在生成…',
       'meta.duration': '活跃 {value}',
       'transcript.jump': '跳到最新',
+      'card.loading': '读取中…',
+      'card.empty': '暂无内容',
+      'card.failed': '对话不可读',
       'role.user': '用户',
       'role.assistant': '子智能体',
       'branch.expand': '展开子级',
@@ -327,6 +330,9 @@ window.__ModuleLoader__.load({
       'detail.streaming': 'Generating…',
       'meta.duration': 'active {value}',
       'transcript.jump': 'Jump to latest',
+      'card.loading': 'Loading…',
+      'card.empty': 'No content yet',
+      'card.failed': 'Conversation unavailable',
       'role.user': 'User',
       'role.assistant': 'Subagent',
       'branch.expand': 'Expand branch',
@@ -869,6 +875,117 @@ window.__ModuleLoader__.load({
     }
 
     /* ------------------------------------------------------------------ */
+    /* 卡片内的「最近三行」                                                 */
+    /* ------------------------------------------------------------------ */
+
+    /** 卡片上显示多少行最新对话。 */
+    const CARD_LINES = 3;
+    /** 单行裁剪长度：卡片只要一行摘要，超长文本不该把 DOM 撑大。 */
+    const CARD_LINE_CHARS = 220;
+
+    /** 压平换行并截断，保证一条消息恰好占一行。 */
+    function oneLine(text, max) {
+      const flat = String(text).replace(/\s+/g, ' ').trim();
+      return flat.length > max ? flat.slice(0, max - 1) + '…' : flat;
+    }
+
+    /**
+     * 一张卡片底部的实时对话摘要：该子会话最近 3 条消息，每条一行。
+     * 与详情抽屉一样走 retain + eventSource 订阅，卸载必定 release()；
+     * 外部任务没有本地会话，不 retain，也不占位。
+     */
+    function CardPreview(props) {
+      const address = props.address;
+      const t = props.t;
+      const running = props.running === true;
+      const external = props.entry.mode === 'external';
+      const dataState = React.useState(null);
+      const data = dataState[0];
+      const setData = dataState[1];
+      const failedState = React.useState(false);
+      const failed = failedState[0];
+      const setFailed = failedState[1];
+
+      React.useEffect(function () {
+        if (external) return undefined;
+        let alive = true;
+        let unsub = null;
+        let ref = null;
+        const teardown = function () {
+          alive = false;
+          if (unsub !== null) { try { unsub(); } catch (e0) {} unsub = null; }
+          if (ref !== null) {
+            try { ref.release(); } catch (e1) { /* 已释放 */ }
+            ref = null;
+          }
+        };
+        const sessions = PLUGIN_CTX && PLUGIN_CTX.sessions;
+        if (!sessions) { setFailed(true); return teardown; }
+        let handle;
+        try {
+          handle = sessions.retain(address, { source: RETAIN_SOURCE });
+        } catch (e) {
+          console.error('[subagent-panel] card retain failed:', e);
+          setFailed(true);
+          return teardown;
+        }
+        if (!alive) {
+          try { handle.release(); } catch (e) {}
+          return teardown;
+        }
+        ref = handle;
+        Promise.resolve(handle.ready).then(function () {
+          if (!alive) return;
+          const source = ref && ref.binding ? ref.binding.eventSource : undefined;
+          if (!source) { setFailed(true); return; }
+          const pull = function () {
+            if (!alive) return;
+            try {
+              setData(extractTranscript(source.getSnapshot()));
+            } catch (e) {
+              console.error('[subagent-panel] card preview read failed:', e);
+              setFailed(true);
+            }
+          };
+          pull();
+          unsub = source.subscribe(pull);
+        }).catch(function (e) {
+          console.error('[subagent-panel] card preview open failed:', e);
+          if (alive) setFailed(true);
+        });
+        return teardown;
+      }, [address.parentSessionId, address.childSessionId, address.mode, external]);
+
+      if (external) return null;
+
+      const messages = data === null ? [] : data.messages;
+      const lines = [];
+      if (failed) {
+        lines.push(h('div', { key: 'failed', className: 'dspLine', 'data-tone': 'muted' },
+          h('span', { key: 'text', className: 'dspLineText' }, t('card.failed'))));
+      } else if (data === null) {
+        lines.push(h('div', { key: 'loading', className: 'dspLine', 'data-tone': 'muted' },
+          h('span', { key: 'text', className: 'dspLineText' }, t('card.loading'))));
+      } else if (messages.length === 0) {
+        lines.push(h('div', { key: 'empty', className: 'dspLine', 'data-tone': 'muted' },
+          h('span', { key: 'text', className: 'dspLineText' },
+            running ? t('detail.streaming') : t('card.empty'))));
+      } else {
+        messages.slice(-CARD_LINES).forEach(function (msg, index) {
+          lines.push(h('div', {
+            key: 'line-' + index, className: 'dspLine', 'data-role': msg.role,
+          },
+            h('span', { key: 'role', className: 'dspLineRole' },
+              msg.role === 'user' ? t('role.user') : t('role.assistant')),
+            h('span', { key: 'text', className: 'dspLineText', title: msg.text },
+              oneLine(msg.text, CARD_LINE_CHARS)),
+          ));
+        });
+      }
+      return h('div', { className: 'dspCardLines' }, lines);
+    }
+
+    /* ------------------------------------------------------------------ */
     /* 图标                                                                */
     /* ------------------------------------------------------------------ */
 
@@ -996,18 +1113,28 @@ window.__ModuleLoader__.load({
       '.dspActionErrorText{flex:1 1 auto;min-width:0;overflow-wrap:anywhere;}',
 
       '.dspNode{position:relative;min-width:0;}',
-      '.dspRow{position:relative;display:flex;align-items:flex-start;gap:7px;box-sizing:border-box;width:100%;min-height:40px;margin:0;padding:4px 6px 4px 9px;border:0;border-radius:var(--dsw-radius-md,12px);background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;line-height:17px;text-align:left;cursor:pointer;transition:background 120ms ease;}',
-      '.dspRow:focus-visible{background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,0.10));outline:2px solid var(--dsw-alias-brand-primary,rgba(127,127,127,0.6));outline-offset:-2px;}',
-      '@media(hover:hover){.dspRow:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,0.10));}}',
-      '.dspRow[aria-disabled="true"]{cursor:default;color:var(--dsw-alias-label-secondary);}',
-      '@media(hover:hover){.dspRow[aria-disabled="true"]:hover{background:transparent;}}',
+      // 每张卡片：浅底 + 细边 + 圆角，内部两段（标题行 / 最近三行对话）。
+      '.dspCard{position:relative;display:flex;flex-direction:column;box-sizing:border-box;width:100%;margin:0;padding:6px 7px 7px;border:1px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-md,12px);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;line-height:17px;text-align:left;cursor:pointer;transition:background 120ms ease,border-color 120ms ease;}',
+      '.dspCard:focus-visible{border-color:var(--dsw-alias-border-l2);outline:2px solid var(--dsw-alias-brand-primary,rgba(127,127,127,0.6));outline-offset:-2px;}',
+      '@media(hover:hover){.dspCard:hover{background:var(--dsw-alias-bg-layer-2);border-color:var(--dsw-alias-border-l2);}}',
+      '.dspCard[aria-disabled="true"]{cursor:default;color:var(--dsw-alias-label-secondary);}',
+      '@media(hover:hover){.dspCard[aria-disabled="true"]:hover{background:var(--dsw-alias-bg-layer-1);border-color:var(--dsw-alias-border-l1);}}',
+      '.dspCardHead{display:flex;align-items:flex-start;gap:7px;min-width:0;}',
+      '.dspCardTitle{display:flex;flex:1;flex-direction:column;min-width:0;}',
+      // 最近三行：每行一条消息，单行省略，不再折行撑高卡片。
+      '.dspCardLines{display:flex;flex-direction:column;gap:1px;margin:4px 0 0 21px;min-width:0;}',
+      '.dspLine{display:flex;gap:5px;min-width:0;font-size:11px;line-height:15px;color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary));}',
+      '.dspLine[data-tone="muted"]{opacity:.75;}',
+      '.dspLine[data-role="user"] .dspLineRole{color:var(--dsw-alias-label-secondary);}',
+      '.dspLineRole{flex:none;opacity:.85;}',
+      '.dspLineText{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
 
       '.dspDisclosure{display:inline-flex;align-items:center;justify-content:center;flex:none;width:14px;height:17px;padding:0;border:0;background:transparent;color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary));cursor:pointer;position:relative;}',
       '.dspDisclosure::after{content:"";position:absolute;top:-4px;bottom:-4px;left:-7px;width:28px;}',
       '.dspDisclosure svg{width:12px;height:12px;transition:transform 120ms ease;}',
       '.dspDisclosure:focus-visible{color:var(--dsw-alias-label-primary);outline:2px solid var(--dsw-alias-brand-primary,rgba(127,127,127,0.6));outline-offset:1px;}',
       '@media(hover:hover){.dspDisclosure:hover{color:var(--dsw-alias-label-primary);}}',
-      '.dspNode[data-open="true"]>.dspRow>.dspDisclosure svg{transform:rotate(90deg);}',
+      '.dspNode[data-open="true"]>.dspCard>.dspCardHead>.dspDisclosure svg{transform:rotate(90deg);}',
       '.dspDisclosureSpace{flex:none;width:14px;height:17px;}',
 
       '.dspActivity{display:inline-flex;align-items:center;justify-content:center;flex:none;width:14px;height:17px;}',
@@ -1018,7 +1145,7 @@ window.__ModuleLoader__.load({
       '.dspSpin{width:10px;height:10px;border-radius:50%;border:2px solid var(--dsw-alias-brand-primary);border-bottom-color:transparent;animation:dspSpin .9s linear infinite;}',
       '@keyframes dspSpin{to{transform:rotate(360deg);}}',
 
-      '.dspContent{display:flex;flex:1;flex-direction:column;min-width:0;}',
+      '.dspTree{display:flex;flex-direction:column;gap:6px;}',
       '.dspLabel{color:inherit;font-size:13px;font-weight:400;white-space:normal;overflow-wrap:anywhere;}',
       '.dspNode[data-current="true"] .dspLabel{font-weight:500;}',
       '.dspSecondary{color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary));font-size:12px;white-space:normal;overflow-wrap:anywhere;}',
@@ -1036,7 +1163,7 @@ window.__ModuleLoader__.load({
       '.dspRowClear:focus-visible{background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,0.12));color:var(--dsw-alias-state-error-primary);opacity:1;outline:2px solid var(--dsw-alias-state-error-primary);outline-offset:1px;}',
       '@media(hover:hover){.dspNode:hover .dspRowClear{opacity:1;}}',
 
-      '.dspChildren{margin-left:16px;padding-left:3px;border-left:0.5px solid var(--dsw-alias-border-l2);}',
+      '.dspChildren{display:flex;flex-direction:column;gap:6px;margin:6px 0 0 10px;padding-left:8px;border-left:1px solid var(--dsw-alias-border-l2);}',
 
       '.dspDetail{padding:2px 10px 10px 30px;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;}',
       '.dspDetailMeta{margin:0 0 6px;color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary));font-size:11px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere;}',
@@ -1341,7 +1468,7 @@ window.__ModuleLoader__.load({
 
       const reserveDisclosure = entries.some(function (e) { return canExpand(e, listState); });
 
-      return h('div', { role: 'tree' }, entries.map(function (entry) {
+      return h('div', { role: 'tree', className: 'dspTree' }, entries.map(function (entry) {
         const external = entry.mode === 'external';
         const expandable = canExpand(entry, listState);
         const failedChildren = childCatalogFailed(entry, listState);
@@ -1434,7 +1561,13 @@ window.__ModuleLoader__.load({
           dismiss(entry.id);
         };
 
-        const rowChildren = [
+        const cardAddress = {
+          parentSessionId: parentId,
+          childSessionId: entry.id,
+          mode: external ? 'unknown' : entry.mode,
+        };
+
+        const cardHead = [
           expandable
             ? h('button', {
               key: 'disc', type: 'button', className: 'dspDisclosure', tabIndex: -1,
@@ -1447,7 +1580,7 @@ window.__ModuleLoader__.load({
             key: 'act', className: 'dspActivity',
             title: stateLabel, 'aria-hidden': true,
           }, h(StatusGlyph, { state: state })),
-          h('span', { key: 'content', className: 'dspContent' },
+          h('span', { key: 'content', className: 'dspCardTitle' },
             h('span', { key: 'label', className: 'dspLabel' }, primaryLabel),
             secondary !== '' ? h('span', { key: 'secondary', className: 'dspSecondary' }, secondary) : null,
           ),
@@ -1465,13 +1598,23 @@ window.__ModuleLoader__.load({
               title: t('detail.openAside'),
               onClick: onAside,
             }, h(ArrowUpRightIcon, { size: 13 })),
-          // 行尾单个清除：不必展开详情即可把这一行从面板移除（仅隐藏，不动会话）。
+          // 卡片右上角的单个清除：不必展开详情即可把这张卡从面板移除（仅隐藏，不动会话）。
           h('button', {
             key: 'clearRow', type: 'button', className: 'dspRowClear', tabIndex: -1,
             'aria-label': t('action.clearRow', { label: primaryLabel }),
             title: t('action.clearRow', { label: primaryLabel }) + ' — ' + t('hidden.note'),
             onClick: onClear,
           }, h(TrashIcon, { size: 11 })),
+        ];
+
+        const cardChildren = [
+          h('div', { key: 'head', className: 'dspCardHead' }, cardHead),
+          // 最近三行对话，动态跟随该子会话的事件流。
+          external
+            ? null
+            : h(CardPreview, {
+              key: 'lines', address: cardAddress, entry: entry, t: t, running: running,
+            }),
         ];
 
         const nodeChildren = [
@@ -1488,11 +1631,11 @@ window.__ModuleLoader__.load({
             'aria-selected': detailOpen || undefined,
             'aria-controls': detailOpen ? detailDomId : undefined,
             'aria-current': isCurrent || undefined,
-            className: 'dspRow',
+            className: 'dspCard',
             onClick: onToggleDetail,
             onKeyDown: function (event) {
-              // 只处理行本身获得焦点时的按键：否则在行内按钮或详情里的文本框上
-              // 按 Enter/方向键会被这一行吞掉。
+              // 只处理卡片本身获得焦点时的按键：否则在卡内按钮或详情里的文本框上
+              // 按 Enter/方向键会被这张卡吞掉。
               if (event.target !== event.currentTarget) return;
               if (event.key === 'Enter' || event.key === ' ') {
                 event.preventDefault();
@@ -1508,7 +1651,7 @@ window.__ModuleLoader__.load({
                 onToggleBranch(event);
               }
             },
-          }, rowChildren),
+          }, cardChildren),
         ];
 
         if (failedChildren && !isExpanded) {
@@ -1526,11 +1669,7 @@ window.__ModuleLoader__.load({
         }
 
         if (detailOpen) {
-          const address = {
-            parentSessionId: parentId,
-            childSessionId: entry.id,
-            mode: external ? 'unknown' : entry.mode,
-          };
+          const address = cardAddress;
           const createdText = formatCreated(entry.createdAt);
           const metaParts = [
             createdText !== undefined ? t('detail.created') + ' ' + createdText : undefined,
