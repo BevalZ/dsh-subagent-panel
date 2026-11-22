@@ -176,7 +176,13 @@ window.__ModuleLoader__.load({
      * 只在侧栏已展开、且该会话没有任何其它标签页时动手——不抢焦点、不替换用户在看的标签。
      * 用户关掉之后再也不会自动放入（按会话记在 localStorage）。
      */
+    /** 「自动放入」的节流：会话流每来一个事件都会触发一次检查，没必要每次都算。 */
+    let lastEnsureAt = 0;
+
     function ensurePanelTab() {
+      const nowMs = Date.now();
+      if (nowMs - lastEnsureAt < 1000) return;
+      lastEnsureAt = nowMs;
       const sb = getPluginService('sidebarRight');
       if (sb === undefined || typeof sb.openTab !== 'function') return;
       const sessionId = currentSessionOf(sb);
@@ -575,14 +581,16 @@ window.__ModuleLoader__.load({
      * 已从面板清除的行不计入，否则隐藏一个运行中的子级会让面板永远每秒重渲染。
      */
     /**
-     * 可见层级里是否还有运行中的子代理（决定是否启动秒级时钟）。
-     * 默认全展开，所以沿三条边下探：未被折叠的分支、被清除但子级被上提的分支
-     * （后者的子级仍在屏幕上，耗时必须继续跳动），以及根层。
+     * 一次遍历同时回答三个问题：有没有在跑的、有没有刚完成的、有没有失败的。
+     * 之前这三个问题各走一遍整棵树，每次渲染就是三次全树扫描；合并成一次。
+     * 默认全展开，所以沿两条边下探：未折叠的分支、被清除但子级被上提的分支。
      */
-    function anyRunningVisible(listState, statuses, rootId, collapsed, hidden) {
+    function scanTree(listState, statuses, rootId, collapsed, hidden, now) {
       const hiddenSet = hidden || new Set();
-      const queue = [rootId];
+      const collapsedSet = collapsed || new Set();
+      const result = { running: false, flashing: false, failed: false };
       const seen = new Set();
+      const queue = [rootId];
       while (queue.length > 0 && seen.size < 200) {
         const id = queue.shift();
         if (typeof id !== 'string' || seen.has(id)) continue;
@@ -591,11 +599,14 @@ window.__ModuleLoader__.load({
         for (let i = 0; i < catalog.entries.length; i++) {
           const entry = catalog.entries[i];
           if (hiddenSet.has(entry.id)) { queue.push(entry.id); continue; }
-          if (entry.activity === 'running') return true;
-          if (!collapsed.has(entry.id)) queue.push(entry.id);
+          const state = entryState(entry, listState, statuses);
+          if (state === 'running') result.running = true;
+          else if (state === 'failed') result.failed = true;
+          else if (isFreshlyCompleted(entry, listState, statuses, now)) result.flashing = true;
+          if (!collapsedSet.has(entry.id)) queue.push(entry.id);
         }
       }
-      return false;
+      return result;
     }
 
     /**
@@ -686,44 +697,6 @@ window.__ModuleLoader__.load({
     }
 
     /** 可见范围里是否还有刚完成、正在闪条带的卡片（用于让秒级时钟多跑一分钟）。 */
-    function anyFlashing(listState, statuses, rootId, hidden, now) {
-      const hiddenSet = hidden || new Set();
-      const seen = new Set();
-      const queue = [rootId];
-      while (queue.length > 0 && seen.size < 200) {
-        const id = queue.shift();
-        if (typeof id !== 'string' || seen.has(id)) continue;
-        seen.add(id);
-        const catalog = deriveCatalog(listState, statuses, id);
-        for (let i = 0; i < catalog.entries.length; i++) {
-          const entry = catalog.entries[i];
-          if (hiddenSet.has(entry.id)) { queue.push(entry.id); continue; }
-          if (isFreshlyCompleted(entry, listState, statuses, now)) return true;
-          queue.push(entry.id);
-        }
-      }
-      return false;
-    }
-
-    /** 可见范围里是否还有「未正常结束」的子代理（决定是否显示一键清理按钮）。 */
-    function anyFailedVisible(listState, statuses, rootId, hidden) {
-      const hiddenSet = hidden || new Set();
-      const seen = new Set();
-      const queue = [rootId];
-      while (queue.length > 0 && seen.size < 200) {
-        const id = queue.shift();
-        if (typeof id !== 'string' || seen.has(id)) continue;
-        seen.add(id);
-        const catalog = deriveCatalog(listState, statuses, id);
-        for (let i = 0; i < catalog.entries.length; i++) {
-          const entry = catalog.entries[i];
-          if (hiddenSet.has(entry.id)) { queue.push(entry.id); continue; }
-          if (entryState(entry, listState, statuses) === 'failed') return true;
-          queue.push(entry.id);
-        }
-      }
-      return false;
-    }
 
     /* ------------------------------------------------------------------ */
     /* 刷新与动作                                                          */
@@ -906,13 +879,25 @@ window.__ModuleLoader__.load({
       return undefined;
     }
 
-    function extractTranscript(win) {      const out = [];
+    /**
+     * 取最近几条消息。
+     * **从窗口尾部倒着扫，凑够条数就停**：早期版本每次都遍历整个事件窗口再切尾，
+     * 而卡片每个事件都会调一次，窗口长、卡片多时就是纯浪费。
+     * @param win - 事件窗口快照。
+     * @param limit - 需要多少条（默认详情抽屉的条数）。
+     */
+    function extractTranscript(win, limit) {
+      const max = typeof limit === 'number' && limit > 0 ? limit : TRANSCRIPT_LIMIT;
       const entries = (win && win.entries) || [];
-      entries.forEach(function (row) {
-        if (row === null || typeof row !== 'object' || row.type !== 'event') return;
+      const out = [];
+      let i = entries.length - 1;
+      for (; i >= 0 && out.length < max; i--) {
+        const row = entries[i];
+        if (row === null || typeof row !== 'object' || row.type !== 'event') continue;
         const ev = row.event;
+        if (ev === null || typeof ev !== 'object') continue;
         if (ev.type === 'user/message') {
-          if (!isHumanUserMessage(ev.data)) return;
+          if (!isHumanUserMessage(ev.data)) continue;
           const text = blocksText(ev.data && ev.data.content);
           if (text) out.push({ role: 'user', text: text });
         } else if (ev.type === 'assistant/message') {
@@ -920,10 +905,12 @@ window.__ModuleLoader__.load({
           const text = blocksText(m && m.content);
           if (text) out.push({ role: 'assistant', text: text });
         }
-      });
+      }
+      out.reverse();
       return {
-        messages: out.slice(-TRANSCRIPT_LIMIT),
-        omitted: out.length > TRANSCRIPT_LIMIT || Boolean(win && win.hasMore),
+        messages: out,
+        // 停在中途 => 前面还有更早的内容没取
+        omitted: Boolean(win && win.hasMore) || i >= 0,
       };
     }
 
@@ -1130,6 +1117,10 @@ window.__ModuleLoader__.load({
           if (!alive) return;
           const source = ref && ref.binding ? ref.binding.eventSource : undefined;
           if (!source) { setFailed(true); return; }
+          // 每个事件都会触发 pull，而 setState 会让整棵树重渲染一次。
+          // 多个子代理同时输出时这就是 N×M 次全树渲染 —— 之前把那台机器卡死的就是它。
+          // 所以只有「摘要内容真的变了」才 setState。
+          let lastSignature = null;
           const pull = function () {
             if (!alive) return;
             try {
@@ -1137,7 +1128,14 @@ window.__ModuleLoader__.load({
               // 顺手记下最后一次事件的真实时间：它就是「完成时刻」的时间源。
               const lastTime = extractLastEventTime(snapshot);
               if (typeof lastTime === 'number') lastEventTimes[address.childSessionId] = lastTime;
-              setData(extractTranscript(snapshot));
+              const next = extractTranscript(snapshot, CARD_LINES);
+              const tail = next.messages.length > 0 ? next.messages[next.messages.length - 1] : undefined;
+              const signature = next.messages.length + '|' +
+                (tail === undefined ? '' : tail.role + ':' + tail.text.length + ':' + tail.text.slice(-24)) + '|' +
+                (next.omitted ? '1' : '0');
+              if (signature === lastSignature) return;
+              lastSignature = signature;
+              setData(next);
             } catch (e) {
               console.error('[subagent-panel] card preview read failed:', e);
               setFailed(true);
@@ -1359,10 +1357,13 @@ window.__ModuleLoader__.load({
       '.dspTree{display:flex;flex-direction:column;gap:9px;}',
       // 被上提的卡片（原来在已清除的父级之下）用虚线左边框提示它换了一层。
       '.dspNode[data-lifted="true"]>.dspCard{border-left-style:dashed;border-left-width:2px;border-left-color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary));}',
-      // 刚完成的卡片：一条彩色条带沿上边缘流动，1 分钟后（data-flash 撤掉）自然停止。
-      '.dspNode[data-flash="true"]>.dspCard::before{content:"";position:absolute;left:0;right:0;top:0;height:3px;border-radius:var(--dsw-radius-md,12px) var(--dsw-radius-md,12px) 0 0;background:linear-gradient(90deg,#34c759,#0a84ff,#bf5af2,#ff9f0a,#34c759);background-size:220% 100%;animation:dspBand 1.5s linear infinite;pointer-events:none;z-index:1;}',
-      '.dspNode[data-flash="true"]>.dspCard{border-color:var(--dsw-alias-border-l2);box-shadow:0 0 0 1px rgba(10,132,255,0.28),0 2px 10px rgba(10,132,255,0.16);}',
-      '@keyframes dspBand{from{background-position:0% 0;}to{background-position:220% 0;}}',
+      // 刚完成的卡片：一圈旋转的彩色渐变环。用 @property 注册角度变量，
+      // 由一张 repeating-conic-gradient + mask 只留边框部分，纯 CSS 完成，
+      // 命中 GPU 的渐变缓存；不新增 DOM 节点、不碰 JS 计时器。
+      '@property --dsp-rotate{syntax:"<angle>";inherits:false;initial-value:0deg;}',
+      '.dspNode[data-flash="true"]>.dspCard{position:relative;border-color:transparent;}',
+      '.dspNode[data-flash="true"]>.dspCard::after{content:"";position:absolute;inset:-2px;border-radius:calc(var(--dsw-radius-md,12px) + 2px);padding:2px;background:repeating-conic-gradient(from var(--dsp-rotate),#34c759 0deg,#0a84ff 90deg,#bf5af2 180deg,#ff9f0a 270deg,#34c759 360deg);-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);mask-composite:exclude;animation:dspRing 2.4s linear infinite;pointer-events:none;}',
+      '@keyframes dspRing{to{--dsp-rotate:360deg;}}',
       '.dspLabel{color:inherit;flex:1 1 auto;min-width:0;font-size:13px;font-weight:400;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}',
       '.dspNode[data-current="true"] .dspLabel{font-weight:500;}',
       '.dspSecondary{flex:1 1 auto;min-width:0;color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary));font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}',
@@ -1400,7 +1401,7 @@ window.__ModuleLoader__.load({
       '.dspText{display:-webkit-box;-webkit-line-clamp:6;-webkit-box-orient:vertical;overflow:hidden;font-size:12px;line-height:18px;overflow-wrap:anywhere;white-space:pre-wrap;}',
       '.dspDetailNote{margin:0;padding:8px 0 2px;color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary));font-size:11px;line-height:16px;overflow-wrap:anywhere;}',
       '.dspDetailError{margin:0;padding:8px 0 2px;color:var(--dsw-alias-state-error-primary);font-size:11px;line-height:16px;overflow-wrap:anywhere;}',
-      '@media(prefers-reduced-motion:reduce){.dspSpin,.dspIconButton[data-busy="true"] svg,.dspNode[data-flash="true"]>.dspCard::before{animation:none;}.dspDisclosure svg{transition:none;}}',
+      '@media(prefers-reduced-motion:reduce){.dspSpin,.dspIconButton[data-busy="true"] svg,.dspNode[data-flash="true"]>.dspCard::after{animation:none;}.dspDisclosure svg{transition:none;}}',
     ].join('\n');
 
     /* ------------------------------------------------------------------ */
@@ -1536,15 +1537,14 @@ window.__ModuleLoader__.load({
         });
       }, [tab]);
 
-      const running = rootId === undefined
-        ? false
-        : anyRunningVisible(listState, statuses, rootId, collapsed, hidden);
+      // 一次全树扫描同时回答三件事（运行中 / 刚完成 / 失败），不再各走一遍。
+      const scan = rootId === undefined
+        ? { running: false, flashing: false, failed: false }
+        : scanTree(listState, statuses, rootId, collapsed, hidden, now);
+      const running = scan.running;
       // 刚完成的卡片要在 1 分钟内停掉闪动，所以即使没有运行中的子代理，
       // 只要还有新鲜完成的卡片，时钟也得继续走一小会儿。
-      const flashing = rootId === undefined
-        ? false
-        : !running && anyFlashing(listState, statuses, rootId, hidden, now);
-      const ticking = running || flashing;
+      const ticking = running || scan.flashing;
       React.useEffect(function () {
         if (!ticking) return undefined;
         const clock = getPluginService('timer');
@@ -1598,7 +1598,7 @@ window.__ModuleLoader__.load({
       const hasFinished = visible.some(function (e) {
         return entryState(e, listState, statuses) !== 'running';
       });
-      const hasFailed = anyFailedVisible(listState, statuses, rootId, hidden);
+      const hasFailed = scan.failed;
 
       return h('div', { className: 'dspRoot', 'data-subagent-inspector': '' },
         h('div', { className: 'dspHead' },
