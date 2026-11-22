@@ -1,0 +1,1 @@
+![Schematic of the subagent panel as a right-sidebar tab: a header row with a running spinner and progress counts, and a tree of subagent rows with status dots and indented nested rows](preview.svg)

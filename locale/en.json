@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Subagent panel",
+    "description": "Subagent panel for the right sidebar, reachable three ways: the \"Subagents\" card in the sidebar's \"+\" guide, Ctrl+Shift+S, or automatic placement when the sidebar is empty and the current conversation already has subagents (closing it is remembered per conversation). It lists the current session's subagent tree with colour-coded state - running (animated accent arc), completed (green), ended abnormally (red), not running (hollow grey) - plus live token and duration figures. Click a row to expand its detail: creation time, usage, and a preview of recent messages that auto-scrolls to the newest while the child runs. The trash control at the end of a row clears just that row; you can also stop a running subagent, clear all finished rows, or restore everything. Reads only session data already held by this client and makes no model requests; clearing only hides rows and deletes nothing.",
+    "detail": "docs/DETAIL.md"
+  }
+}

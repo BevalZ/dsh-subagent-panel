@@ -1,0 +1,20 @@
+# 本地 bundle：子智能体面板（右侧栏标签页）
+#
+# 入口
+#  - 侧栏「+」引导页里的「子智能体」卡片（排在最前）。
+#  - 快捷键 Ctrl+Shift+S（可在「设置 → 快捷键」里改键）。
+#  - 侧栏为空且当前对话已有子智能体时自动放入（关掉后按会话记住，不再自动放）。
+#  - 不占用会话标题栏。
+#
+# 机制
+#  - 标签类型注册在 `ctx.sidebarRightTabs`（kind `subagentpanel`），同时识别
+#    资源地址 `dsh-resource://subagentpanel/session/<rootId>` 与引导页页面地址
+#    `sidebar://subagentpanel`。
+#  - 标签本体注册在 `sidebar.right.pane.tab`（keyed 座，key 用实现 id），
+#    通过 `useResource(address)` 取回根会话 id；页面地址回退到标签所在会话。
+#  - 资源协议 `subagentpanel` 由本插件注册，只把地址翻译成根会话 id。
+#
+# 卸载时只关闭本类型（kind 精确匹配）的标签页，不动其它来源的标签页。
+- insert:
+    - id: subagent-panel
+      name: 'dsh-subagent-panel'

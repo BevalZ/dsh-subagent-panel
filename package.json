@@ -1,0 +1,56 @@
+{
+  "name": "dsh-subagent-panel",
+  "version": "1.4.0",
+  "description": "Subagent panel for the DeepSeek Harness right sidebar: a colour-coded subagent tree with live token/duration figures, a per-row detail drawer with an auto-following transcript preview, per-row and bulk clear, and a stop action for running children.",
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "dsh-plugin",
+    "dsh-bundle",
+    "subagent",
+    "sidebar"
+  ],
+  "license": "MIT",
+  "author": "BevalZ",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/BevalZ/dsh-subagent-panel.git"
+  },
+  "bugs": {
+    "url": "https://github.com/BevalZ/dsh-subagent-panel/issues"
+  },
+  "homepage": "https://github.com/BevalZ/dsh-subagent-panel#readme",
+  "type": "module",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "docs",
+    "icon.svg",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-sidebar-right"
+      ]
+    }
+  }
+}
